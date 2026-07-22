@@ -35,8 +35,17 @@ function handleHttpRequest(req, res) {
   const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   let pathname = decodeURIComponent(requestUrl.pathname);
 
-  if (pathname === '/') {
-    pathname = '/new_game.html';
+  const legacyPathMap = {
+    '/': '/domishiny.html',
+    '/new_game.html': '/domishiny.html',
+    '/new_game': '/domishiny.html',
+    '/index.html': '/domishiny.html',
+    '/new_game.css': '/domishiny.css',
+    '/new_game.js': '/domishiny.js'
+  };
+
+  if (legacyPathMap[pathname]) {
+    pathname = legacyPathMap[pathname];
   }
 
   const normalizedPath = pathname.replace(/^\/+/, '');

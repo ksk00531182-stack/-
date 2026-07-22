@@ -1,5 +1,5 @@
 (async function () {
-  console.log('new_game.js initialized');
+  console.log('domishiny.js initialized');
   let socket = null;
 
   const elements = {
