@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>ドミシャニ</title>
+  <link rel="stylesheet" href="new_game.css">
+</head>
+<body>
+  <main class="app">
+    <section id="title-screen" class="title-screen">
+      <div class="title-card">
+        <p class="eyebrow">デッキ構築型カードゲーム</p>
+        <h1>ドミシャニ</h1>
+        <p class="subtitle">プロデューサー1か2で部屋に参加しよう</p>
+        <div class="title-room-actions">
+          <button id="title-create-room-btn" class="start-btn">プロデューサー1で参加</button>
+          <button id="title-join-room-btn">プロデューサー2で参加</button>
+          <button id="title-cpu-btn">CPU戦</button>
+          <button id="title-rules-btn">ルール</button>
+        </div>
+        <div style="margin-top:12px; display:flex; justify-content:center; gap:8px;">
+          <button id="debug-toggle-btn" class="debug-action-btn debug-action-btn-hidden" type="button">デバッグメニュー</button>
+        </div>
+        <!-- debug panel moved outside title-screen for in-game access -->
+      </div>
+    </section>
+
+    <!-- debug panel (global) -->
+    <div id="debug-panel" class="debug-panel hidden" style="margin-top:12px; position:fixed; right:18px; top:18px; z-index:1200; width:360px;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center; align-items:center;">
+        <button id="debug-close-btn" class="debug-action-btn">閉じる</button>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px; justify-content:center; margin-top:8px; align-items:center;">
+        <div id="debug-card-list" style="max-height:220px; overflow:auto; display:flex; gap:6px; flex-wrap:wrap; justify-content:center; padding:6px; border-radius:8px; border:1px solid rgba(148,163,184,0.15); background:rgba(248,250,252,0.6);"></div>
+        <div id="debug-deck-preview" style="min-height:44px; display:flex; gap:6px; flex-wrap:wrap; justify-content:center;"></div>
+        <div style="display:flex; gap:8px; justify-content:center;">
+          <button id="debug-apply-deck" class="debug-action-btn">選択カードを手札に追加</button>
+          <button id="debug-clear-selection" class="debug-action-btn">選択クリア</button>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:center; margin-top:8px; align-items:center;">
+        <input id="debug-turn-ap" placeholder="AP 追加量" style="width:120px; padding:8px; border-radius:8px; border:1px solid rgba(148,163,184,0.25);" />
+        <input id="debug-turn-m" placeholder="M 追加量" style="width:120px; padding:8px; border-radius:8px; border:1px solid rgba(148,163,184,0.25);" />
+        <button id="debug-add-resources" class="debug-action-btn">追加</button>
+      </div>
+      <div id="debug-output" style="margin-top:8px; color:var(--muted); text-align:center;"></div>
+    </div>
+
+    <div id="game-screen" class="game-screen hidden">
+      <div class="viewport">
+        <section class="game-shell">
+          <section class="market-wrapper">
+            <section class="market-panel panel">
+              <div id="market" class="market"></div>
+            </section>
+            <section class="special-cards-panel panel">
+              <div id="special-cards" class="special-cards"></div>
+            </section>
+          </section>
+
+          <section class="play-area">
+            <div class="panel hand-panel">
+              <div class="played-area-wrapper">
+                <div class="resource-panel resource-panel-field">
+                  <div class="resource-item resource-item-pp">
+                    <div>AP</div>
+                    <div><span id="resource-ap-count">0</span></div>
+                  </div>
+                  <div class="resource-item resource-item-pp">
+                    <div>M</div>
+                    <div><span id="resource-m-count">0</span></div>
+                  </div>
+                </div>
+                <div id="played-area" class="played-area"></div>
+                <div class="resource-panel resource-panel-field resource-panel-field-extra">
+                  <div class="resource-item resource-item-pp is-pp">
+                    <div>PP</div>
+                    <div><span id="resource-energy-count">0</span>/<span id="resource-energy-max">3</span></div>
+                  </div>
+                  <button id="end-turn-btn" class="field-action-btn">ターン終了</button>
+                </div>
+              </div>
+              <div class="hand-grid">
+                <div class="hand-side-stack">
+                  <div class="resource-panel resource-panel-idle-deck">
+                    <div class="resource-title">アイドル山札</div>
+                    <div class="resource-item">枚数 <span id="resource-idle-deck-count">0</span></div>
+                  </div>
+                  <div class="resource-panel resource-panel-discard">
+                    <div class="resource-title">捨て札</div>
+                    <div class="resource-item">枚数 <span id="resource-discard-count">0</span></div>
+                  </div>
+                  <div class="hand-holder">
+                    <div id="hand" class="hand"></div>
+                  </div>
+                </div>
+                <div class="resource-panel resource-panel-right">
+                  <div class="resource-title">山札</div>
+                  <div class="resource-item">総合計 <span id="resource-deck-total-count">0</span></div>
+                  <div class="resource-item">残り <span id="resource-deck-count">0</span></div>
+                </div>
+              </div>
+            </div>
+            <aside class="play-sidebar panel">
+                <div id="sidebar-status" class="resource-item">部屋が作成されました。相手が参加するのを待っています。</div>
+                <button id="debug-toggle-btn-game" class="debug-action-btn debug-action-btn-hidden" type="button">デバッグメニュー</button>
+                <button id="force-end-condition-btn" class="debug-action-btn debug-action-btn-hidden" type="button">デバッグ: 終了条件を満たす</button>
+                <div id="sidebar-history-filter" class="history-filter-bar"></div>
+                <ul id="sidebar-history" class="history-list"></ul>
+              </aside>
+          </section>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <div id="card-tooltip" class="card-tooltip hidden" role="tooltip"></div>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="card_definitions.js"></script>
+  <script src="new_game.js" defer></script>
+</body>
+</html>
