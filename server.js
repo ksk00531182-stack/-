@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { Server } = require('socket.io');
+const gameLogic = require('./gameLogic');
 
 function getListenPort() {
   const parsed = Number.parseInt(process.env.PORT, 10);
@@ -83,701 +84,99 @@ const io = new Server(server, {
   }
 });
 
-let INITIAL_DECK = [
-  ...Array(7).fill({ name: 'プロデュース', cost: 0, value: 1, type: 'produce', desc: 'PP0<br>AP+1' }),
-  ...Array(3).fill({ name: 'アイドルのお仕事Lv.1', cost: 0, value: 1, type: 'idol-work', desc: '場のアイドルカード1枚につきM+1', ppCost: 0 })
-];
-let ORIGINAL_INITIAL_DECK = null;
+const SPECIAL_CARDS = gameLogic.SPECIAL_CARDS;
+const MAX_GAME_LOG_ENTRIES = gameLogic.MAX_GAME_LOG_ENTRIES;
 
-const SPECIAL_CARDS = [
-  { name: 'ドームライブ', cost: 30, value: 8, currency: 'm', type: 'special', desc: '効果なし', purchaseLimit: 3 },
-  { name: 'アイドルのお仕事Lv.3', cost: 9, value: 3, currency: 'm', type: 'idol-work', desc: '場のアイドルカード1枚につきM+3', purchaseLimit: 10, ppCost: 0 },
-  { name: 'アリーナツアー', cost: 15, value: 6, currency: 'm', type: 'special', desc: '効果なし', purchaseLimit: 5 },
-  { name: 'アイドルのお仕事Lv.2', cost: 6, value: 2, currency: 'm', type: 'idol-work', desc: '場のアイドルカード1枚につきM+2', purchaseLimit: 10, ppCost: 0 },
-  { name: 'ワンマンライブ', cost: 5, value: 3, currency: 'm', type: 'special', desc: '効果なし', purchaseLimit: 8 },
-  { name: 'アイドルのお仕事Lv.1', cost: 3, value: 1, currency: 'm', type: 'idol-work', desc: '場のアイドルカード1枚につきM+1', purchaseLimit: 10, ppCost: 0 }
-];
-
-const UNIT_MEMBER_COUNTS = {
-  'イルミネーションスターズ': 3,
-  'アンティーカ': 5,
-  '放課後クライマックスガールズ': 5,
-  'アルストロメリア': 3,
-  'ストレイライト': 3,
-  'ノクチル': 4,
-  'シーズ': 2,
-  'コメティック': 3
-};
+function appendGameLogEntry(game, message) {
+  return gameLogic.appendGameLogEntry(game, message);
+}
 
 function createPlayer(name, id) {
-  return {
-    id,
-    name,
-    score: 0,
-    hand: [],
-    deck: [],
-    discard: [],
-    idleDeck: [],
-    playedThisTurn: [],
-    energy: 3,
-    resources: { ap: 0, m: 0 },
-    totalEarnedAp: 0,
-    totalEarnedM: 0,
-    connected: true,
-    effects: {}
-  };
+  return gameLogic.createPlayer(name, id);
 }
 
 function getOwnedUnitMembers(player, unitName) {
-  if (!player || !unitName) return [];
-
-  const ownedNames = new Set();
-  const areas = ['deck', 'hand', 'discard', 'playedThisTurn'];
-
-  areas.forEach((area) => {
-    const cards = Array.isArray(player[area]) ? player[area] : [];
-    cards.forEach((card) => {
-      if (card && card.kind === 'idol' && card.unit === unitName && card.name) {
-        ownedNames.add(card.name);
-      }
-    });
-  });
-
-  return Array.from(ownedNames);
+  return gameLogic.getOwnedUnitMembers(player, unitName);
 }
 
 function checkUnitCompletion(player, game) {
-  if (!player || !game) return;
-
-  const units = new Set();
-  const areas = ['deck', 'hand', 'discard', 'playedThisTurn'];
-
-  areas.forEach((area) => {
-    const cards = Array.isArray(player[area]) ? player[area] : [];
-    cards.forEach((card) => {
-      if (card && card.kind === 'idol' && card.unit) {
-        units.add(card.unit);
-      }
-    });
-  });
-
-  units.forEach((unitName) => {
-    const requiredCount = UNIT_MEMBER_COUNTS[unitName] || 0;
-    if (requiredCount === 0) return;
-
-    const unitMembers = getOwnedUnitMembers(player, unitName);
-    if (unitMembers.length === requiredCount) {
-      if (!game._completedUnitsLog) game._completedUnitsLog = [];
-      const completionKey = `${player.id}_${unitName}`;
-      if (!game._completedUnitsLog.includes(completionKey)) {
-        game._completedUnitsLog.push(completionKey);
-        setTimeout(() => {
-          if (!game || !Array.isArray(game.log)) return;
-          const completionMessage = `${player.name}が${unitName}を完成`;
-          if (!game.log.includes(completionMessage)) {
-            game.log.unshift(completionMessage);
-          }
-        }, 0);
-      }
-    }
-  });
+  return gameLogic.checkUnitCompletion(player, game);
 }
 
 function getEffectiveCardCost(player, card) {
-  if (!player || !card) return 0;
-  const baseCost = Number.isFinite(card.ppCost) ? card.ppCost : (card.cost || 0);
-  if (card.kind === 'idol' && player.effects?.nextIdolCostZero) {
-    player.effects.nextIdolCostZero = false;
-    return 0;
-  }
-
-  if (card.kind === 'idol' && player.effects?.idolPPCostZero) {
-    return 0;
-  }
-
-  if (card.type === 'radio_recording' || card.type === 'talk_event' || card.type === 'magazine_shoot') {
-    const idolFieldCount = Array.isArray(player.playedThisTurn)
-      ? player.playedThisTurn.filter((entry) => entry && entry.kind === 'idol').length
-      : 0;
-    return Math.max(0, baseCost - idolFieldCount);
-  }
-
-  if (card.kind !== 'idol') return baseCost;
-
-  const reduction = Number(player.effects?.idolCostReduction || 0);
-  return Math.max(0, baseCost - reduction);
+  return gameLogic.getEffectiveCardCost(player, card);
 }
 
 function applyMarketCardEffect(player, card, game) {
-  if (!player || !card) return;
+  return gameLogic.applyMarketCardEffect(player, card, game);
 }
 
 function clearTurnEffects(player) {
-  if (!player || !player.effects) return;
-  delete player.effects.idolPPCostZero;
-  delete player.effects.nextIdolCostZero;
+  return gameLogic.clearTurnEffects(player);
 }
 
 function shuffle(array) {
-  const copy = [...array];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
+  return gameLogic.shuffle(array);
 }
 
 function addCardToDiscard(player, card, game) {
-  if (!player || !card) return;
-
-  if (Array.isArray(player.discard)) {
-    player.discard.push(card);
-  } else {
-    player.discard = [card];
-  }
-
-  if (card?.drawnFromIdleDeck) {
-    if (game?.log) {
-      game.log.unshift(`${player.name}が${card.name}をスカウト`);
-    }
-  }
-
-  return player.discard;
+  return gameLogic.addCardToDiscard(player, card, game);
 }
 
 function addCardToHand(player, card, game) {
-  if (!player || !card) return;
-
-  if (Array.isArray(player.hand)) {
-    player.hand.push(card);
-  } else {
-    player.hand = [card];
-  }
-
-  if (card?.drawnFromIdleDeck) {
-    if (game?.log) {
-      game.log.unshift(`${player.name}が${card.name}をスカウト`);
-    }
-  }
-
-  return player.hand;
+  return gameLogic.addCardToHand(player, card, game);
 }
 
 function applyCardPlayEffect(player, card, game) {
-  if (!player || !card) return;
-
-  player.resources = player.resources || { ap: 0, m: 0 };
-
-  if (card.kind === 'idol') {
-    player.resources.ap = (player.resources.ap || 0) + 1;
-    player.totalEarnedAp = (player.totalEarnedAp || 0) + 1;
-  }
-
-  if (card.type === 'recover_pp') {
-    player.energy = Math.min(3, (player.energy || 0) + 2);
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用してPPを回復`);
-    }
-    return;
-  }
-
-  if (card.type === 'discard_hand_draw') {
-    const handCards = Array.isArray(player.hand) ? player.hand : [];
-    if (handCards.length) {
-      player.discard = Array.isArray(player.discard) ? [...player.discard, ...handCards] : [...handCards];
-      player.hand = [];
-    }
-    const drawCount = (handCards.length || 0) + 1;
-    for (let i = 0; i < drawCount; i += 1) {
-      if (player.deck.length === 0) {
-        if (player.discard.length === 0) break;
-        player.deck = shuffle(player.discard);
-        player.discard = [];
-      }
-      const drawnCard = player.deck.pop();
-      if (drawnCard) player.hand.push(drawnCard);
-    }
-    player.energy = Math.min(3, (player.energy || 0) + 1);
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用して手札を捨て札にし、${drawCount}枚引いてPPを1回復`);
-    }
-    return;
-  }
-
-  if (card.type === 'radio_recording') {
-    const drawCount = card.effectValue || 2;
-    for (let i = 0; i < drawCount; i += 1) {
-      if (player.deck.length === 0) {
-        if (player.discard.length === 0) break;
-        player.deck = shuffle(player.discard);
-        player.discard = [];
-      }
-      const drawnCard = player.deck.pop();
-      if (drawnCard) player.hand.push(drawnCard);
-    }
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用して${drawCount}枚引きました`);
-    }
-    return;
-  }
-
-  if (card.type === 'talk_event') {
-    const healAmount = card.effectValue || 2;
-    player.energy = Math.min(3, (player.energy || 0) + healAmount);
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用してPPを${healAmount}回復`);
-    }
-    return;
-  }
-
-  if (card.type === 'magazine_shoot') {
-    const drawCount = card.effectValue || 1;
-    const healAmount = 1;
-    for (let i = 0; i < drawCount; i += 1) {
-      if (player.deck.length === 0) {
-        if (player.discard.length === 0) break;
-        player.deck = shuffle(player.discard);
-        player.discard = [];
-      }
-      const drawnCard = player.deck.pop();
-      if (drawnCard) player.hand.push(drawnCard);
-    }
-    player.energy = Math.min(3, (player.energy || 0) + healAmount);
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用して${drawCount}枚引き、PPを${healAmount}回復`);
-    }
-    return;
-  }
-
-  if (card.type === 'self_training') {
-    const drawCount = card.effectValue || 2;
-    for (let i = 0; i < drawCount; i += 1) {
-      if (player.deck.length === 0) {
-        if (player.discard.length === 0) break;
-        player.deck = shuffle(player.discard);
-        player.discard = [];
-      }
-      const drawnCard = player.deck.pop();
-      if (drawnCard) player.hand.push(drawnCard);
-    }
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用して${drawCount}枚引きました`);
-    }
-    return;
-  }
-
-  if (card.type === 'campaign_girl') {
-    player.resources.m = (player.resources.m || 0) + 2;
-    player.totalEarnedM = (player.totalEarnedM || 0) + 2;
-    player.energy = Math.min(3, (player.energy || 0) + 1);
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用してM+2、PPを1回復`);
-    }
-    return;
-  }
-
-  if (card.type === 'gacha_ticket') {
-    const drawCount = 1;
-    for (let i = 0; i < drawCount; i += 1) {
-      if (player.idleDeck?.length === 0) break;
-      const drawnCard = player.idleDeck.pop();
-      if (drawnCard) {
-        drawnCard.drawnFromIdleDeck = true;
-        addCardToHand(player, drawnCard, game);
-      }
-    }
-    player.energy = Math.min(3, (player.energy || 0) + 1);
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用してアイドルデッキから1枚引きました`);
-    }
-    return;
-  }
-
-  if (card.type === 'special_training') {
-    const drawCount = 3;
-    for (let i = 0; i < drawCount; i += 1) {
-      if (player.deck.length === 0) {
-        if (player.discard.length === 0) break;
-        player.deck = shuffle(player.discard);
-        player.discard = [];
-      }
-      const drawnCard = player.deck.pop();
-      if (drawnCard) player.hand.push(drawnCard);
-    }
-    player.energy = Math.min(3, (player.energy || 0) + 1);
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用して3枚引き、PPを1回復`);
-    }
-    return;
-  }
-
-  if (card.type === 'disable_idol_pp') {
-    player.effects = player.effects || {};
-    player.effects.idolPPCostZero = true;
-  }
-
-  if (card.type === 'next_idol_cost_zero') {
-    player.effects = player.effects || {};
-    player.effects.nextIdolCostZero = true;
-    player.energy = Math.min(3, (player.energy || 0) + 1);
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用してPPを1回復`);
-    }
-  }
-
-  if (card.type === 'reset_hand_to_deck') {
-    if (Array.isArray(player.hand) && player.hand.length) {
-      player.deck = [...player.deck, ...player.hand];
-      player.hand = [];
-    }
-  }
-
-  if (card.type === 'discard_hand_draw') {
-    const discardedCount = Array.isArray(player.hand) ? player.hand.length : 0;
-    if (discardedCount > 0) {
-      player.discard = [...(player.discard || []), ...player.hand];
-      player.hand = [];
-    }
-    const drawCount = discardedCount + 1;
-    for (let i = 0; i < drawCount; i += 1) {
-      if (player.deck.length === 0) {
-        if (player.discard.length === 0) break;
-        player.deck = shuffle(player.discard);
-        player.discard = [];
-      }
-      const drawnCard = player.deck.pop();
-      if (drawnCard) player.hand.push(drawnCard);
-    }
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用し、手札を捨てて${drawCount}枚引いた`);
-    }
-    return;
-  }
-
-  if (card.type === 'produce') {
-    player.resources.ap = (player.resources.ap || 0) + 1;
-    player.totalEarnedAp = (player.totalEarnedAp || 0) + 1;
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用`);
-    }
-  } else if (card.type === 'idol-work') {
-    const idolCount = Array.isArray(player.playedThisTurn) ? player.playedThisTurn.filter((c) => c && c.kind === 'idol').length : 0;
-    const gain = (card.value || 1) * idolCount;
-    player.resources.m = (player.resources.m || 0) + gain;
-    player.totalEarnedM = (player.totalEarnedM || 0) + gain;
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用（場のアイドル ${idolCount} 枚で M+${gain}）`);
-    }
-  } else if (card.type === 'draw') {
-    const count = card.value || 1;
-    for (let i = 0; i < count; i += 1) {
-      if (player.deck.length === 0) {
-        if (player.discard.length === 0) break;
-        player.deck = shuffle(player.discard);
-        player.discard = [];
-      }
-      const drawn = player.deck.pop();
-      if (drawn) player.hand.push(drawn);
-    }
-    if (game) {
-      game.log.unshift(`${player.name}が${card.name}を使用して${count}枚引きました`);
-    }
-  }
+  return gameLogic.applyCardPlayEffect(player, card, game);
 }
 
 function loadCardDefinitions() {
-  delete require.cache[require.resolve('./card_definitions')];
-  return require('./card_definitions');
+  return gameLogic.loadCardDefinitions();
 }
 
-// debug turn-bonus storage removed; immediate add is used instead
-
 function findCardTemplateByName(name) {
-  if (!name) return null;
-  const defs = loadCardDefinitions();
-  const { MARKET_CARD_DEFS = [], IDOL_CARD_DEFS = [] } = defs;
-  let found = MARKET_CARD_DEFS.find((c) => c && c.name === name);
-  if (found) return { ...found };
-  found = IDOL_CARD_DEFS.find((c) => c && c.name === name);
-  if (found) return { ...found };
-  return null;
+  return gameLogic.findCardTemplateByName(name);
 }
 
 function createMarket() {
-  const { MARKET_CARD_DEFS = [] } = loadCardDefinitions();
-
-  const fixedNames = ['街中スカウト', '書類選考', '事務所オーディション'];
-  const fixedCards = MARKET_CARD_DEFS.filter((card) => fixedNames.includes(card.name));
-  const poolCards = MARKET_CARD_DEFS.filter((card) => !fixedNames.includes(card.name));
-
-  const aCards = poolCards.filter((card) => typeof card?.internalId === 'string' && /^A\d+$/i.test(card.internalId));
-  const mCards = poolCards.filter((card) => typeof card?.internalId === 'string' && /^M\d+$/i.test(card.internalId));
-
-  const getCardIdNumber = (card) => {
-    const match = (card?.internalId || '').match(/^([AM])(\d+)$/i);
-    return match ? Number(match[2]) : Number.MAX_SAFE_INTEGER;
-  };
-
-  const selectedACards = shuffle(aCards).slice(0, 4)
-    .sort((a, b) => getCardIdNumber(a) - getCardIdNumber(b));
-  let selectedMCards = shuffle(mCards).slice(0, 3)
-    .sort((a, b) => getCardIdNumber(a) - getCardIdNumber(b));
-
-  if (selectedMCards.length < 3) {
-    const fallbackCard = selectedMCards[0] || mCards[0];
-    while (selectedMCards.length < 3 && fallbackCard) {
-      selectedMCards.push({ ...fallbackCard });
-    }
-  }
-
-  const orderedSelectedCards = [];
-  const fixedCardNames = ['街中スカウト', '書類選考', '事務所オーディション'];
-  fixedCardNames.forEach((name) => {
-    const fixedCard = fixedCards.find((card) => card.name === name);
-    if (fixedCard) {
-      orderedSelectedCards.push(fixedCard);
-    }
-  });
-
-  selectedACards.forEach((card) => {
-    orderedSelectedCards.push(card);
-  });
-
-  selectedMCards.forEach((card) => {
-    orderedSelectedCards.push(card);
-  });
-
-  const marketCards = orderedSelectedCards.slice(0, 10);
-
-  console.log('createMarket selected cards:', marketCards.map((c) => c && c.name));
-
-  return Array.from({ length: marketCards.length }, (_, index) => {
-    const card = marketCards[index];
-    if (!card) {
-      return null;
-    }
-
-    return { ...card, purchaseCount: 0, purchaseLimit: 10, soldOut: false };
-  });
+  return gameLogic.createMarket();
 }
 
 function buildDeck() {
-  return shuffle(INITIAL_DECK.map((card) => ({ ...card })));
+  return gameLogic.buildDeck();
 }
 
 function buildIdleDeck() {
-  const { IDOL_CARD_DEFS = [] } = loadCardDefinitions();
-  return shuffle(IDOL_CARD_DEFS.map((card) => ({ ...card })));
+  return gameLogic.buildIdleDeck();
 }
 
 function setupPlayerDeck(player) {
-  player.deck = buildDeck();
-  player.idleDeck = buildIdleDeck();
-  player.hand = [];
-  player.discard = [];
-  player.playedThisTurn = [];
-  player.energy = 3;
-  player.resources = { ap: 0, m: 0 };
-  player.totalEarnedAp = player.totalEarnedAp ?? 0;
-  player.totalEarnedM = player.totalEarnedM ?? 0;
-
-  return player;
+  return gameLogic.setupPlayerDeck(player);
 }
 
 function drawInitialHandForTurn(player) {
-  if (!player) return;
-
-  player.hand = [];
-  player.playedThisTurn = [];
-  player.energy = 3;
-  player.resources = { ap: 0, m: 0 };
-
-  for (let i = 0; i < 5; i += 1) {
-    if (player.deck.length === 0) {
-      if (player.discard.length === 0) break;
-      player.deck = shuffle(player.discard);
-      player.discard = [];
-    }
-    const card = player.deck.pop();
-    if (card) player.hand.push(card);
-  }
+  return gameLogic.drawInitialHandForTurn(player);
 }
 
 function refreshRoomGameState(roomId, game) {
-  if (!game) return;
-
-  game.market = createMarket();
-  game.pendingMarketSelection = null;
-  if (game.players?.player1) {
-    game.players.player1.idleDeck = buildIdleDeck();
-  }
-  if (game.players?.player2) {
-    game.players.player2.idleDeck = buildIdleDeck();
-  }
-
-  return game;
+  return gameLogic.refreshRoomGameState(roomId, game);
 }
 
 function calculateFinalScores(game) {
-  const results = {};
-
-  const UNIT_SCORE_MAP = { 2: 4, 3: 6, 4: 8, 5: 10 };
-
-  Object.keys(game.players || {}).forEach((pId) => {
-    const player = game.players[pId];
-    if (!player) return;
-
-    const allCards = [
-      ...(player.hand || []),
-      ...(player.deck || []),
-      ...(player.discard || []),
-      ...(player.playedThisTurn || [])
-    ];
-
-    let scoreIdolCards = 0;
-    let scoreDeckSize = 0;
-    let scoreEarnedAp = 0;
-    let scoreEarnedM = 0;
-    let scoreSpecialCards = 0;
-
-    const unitMembersMap = {};
-    const specialCardCounts = {
-      ドームライブ: 0,
-      アリーナツアー: 0,
-      ワンマンライブ: 0
-    };
-
-    allCards.forEach((card) => {
-      if (!card) return;
-
-      if (card.kind === 'idol') {
-        scoreIdolCards += 1;
-        if (card.unit) {
-          if (!unitMembersMap[card.unit]) {
-            unitMembersMap[card.unit] = new Set();
-          }
-          unitMembersMap[card.unit].add(card.name);
-        }
-      }
-
-      if (card.name === 'ドームライブ') {
-        specialCardCounts.ドームライブ += 1;
-        scoreSpecialCards += 15;
-      }
-      if (card.name === 'アリーナツアー') {
-        specialCardCounts.アリーナツアー += 1;
-        scoreSpecialCards += 10;
-      }
-      if (card.name === 'ワンマンライブ') {
-        specialCardCounts.ワンマンライブ += 1;
-        scoreSpecialCards += 5;
-      }
-    });
-
-    const completedUnits = [];
-    let scoreUnitCompletion = 0;
-    Object.keys(unitMembersMap).forEach((unitName) => {
-      const ownedCount = unitMembersMap[unitName].size;
-      const requiredCount = UNIT_MEMBER_COUNTS[unitName] || 0;
-
-      if (requiredCount > 0 && ownedCount === requiredCount) {
-        scoreUnitCompletion += (UNIT_SCORE_MAP[requiredCount] || 0);
-        completedUnits.push(unitName);
-      }
-    });
-
-    scoreDeckSize = Math.min(20, Math.floor(allCards.length / 3));
-    const totalEarnedAp = player.totalEarnedAp || 0;
-    const totalEarnedM = player.totalEarnedM || 0;
-    scoreEarnedAp = Math.min(20, Math.floor(totalEarnedAp / 5));
-    scoreEarnedM = Math.min(20, Math.floor(totalEarnedM / 10));
-
-    const totalScore = scoreIdolCards + scoreUnitCompletion + scoreDeckSize + scoreEarnedAp + scoreEarnedM + scoreSpecialCards;
-
-    results[pId] = {
-      total: totalScore,
-      breakdown: {
-        idolCards: scoreIdolCards,
-        completedUnits,
-        unitCompletion: scoreUnitCompletion,
-        deckCardCount: allCards.length,
-        deckSize: scoreDeckSize,
-        earnedAp: scoreEarnedAp,
-        earnedApTotal: totalEarnedAp,
-        earnedM: scoreEarnedM,
-        earnedMTotal: totalEarnedM,
-        specialCards: scoreSpecialCards,
-        specialCardCounts
-      }
-    };
-    player.score = totalScore;
-  });
-
-  return results;
+  return gameLogic.calculateFinalScores(game);
 }
 
 function checkGameEnd(game, currentPlayerId) {
-  if (!game) return false;
-
-  // 条件①：ドームライブがサプライから無い（購入制限 3回 に達している）
-  const domePurchased = game.specialCardPurchases?.['ドームライブ'] || 0;
-  if (domePurchased >= 3) return true;
-
-  // 条件②：マーケットからカードが5種類無くなった
-  let soldOutCount = 0;
-  if (Array.isArray(game.market)) {
-    game.market.forEach((card) => {
-      if (!card || card.soldOut) {
-        soldOutCount += 1;
-      }
-    });
-  }
-  if (soldOutCount >= 5) return true;
-
-  // 条件③：ターンプレイヤーのMが50以上ある状態
-  const player = game.players?.[currentPlayerId];
-  const currentM = player?.resources?.m || 0;
-  if (currentM >= 50) return true;
-
-  return false;
+  return gameLogic.checkGameEnd(game, currentPlayerId);
 }
 
 function endGame(roomId, game) {
-  if (!game) return { winners: [], scores: {} };
-
-  const scores = calculateFinalScores(game);
-  const entries = Object.entries(scores).map(([playerId, scoreObject]) => ({ playerId, score: scoreObject.total }));
-  const maxScore = entries.reduce((highest, entry) => Math.max(highest, entry.score), 0);
-  const winners = entries.filter((entry) => entry.score === maxScore).map((entry) => entry.playerId);
-
-  game.status = 'finished';
-  game.finalScores = scores;
-  game.winners = winners;
-  game.message = winners.length > 1 ? '引き分けです。' : `${game.players[winners[0]]?.name || winners[0]}の勝ちです。`;
-  game.log = Array.isArray(game.log) ? game.log : [];
-  game.log.unshift(game.message);
-
-  return { winners, scores };
+  return gameLogic.endGame(roomId, game);
 }
 
 function createInitialGameState(roomId) {
-  const game = {
-    roomId,
-    status: 'waiting',
-    currentTurn: 'player1',
-    message: '部屋が作成されました。相手が参加するのを待っています。',
-    market: createMarket(),
-    pendingMarketSelection: null,
-    log: [],
-    players: {
-      player1: createPlayer('P1', 'player1'),
-      player2: createPlayer('P2', 'player2')
-    }
-  };
-
-  game.players.player1.connected = true;
-  game.players.player2.connected = false;
-  return game;
+  return gameLogic.createInitialGameState(roomId);
 }
 
 function createInitialGame(roomId) {
@@ -837,7 +236,7 @@ io.on('connection', (socket) => {
     game.message = 'P1のターンです。';
     game.log = [];
     game.specialCardPurchases = {};
-    game.log.unshift('P1のターン');
+    appendGameLogEntry(game, 'P1のターン');
     emitGameUpdate(normalizedRoomId, game);
     socket.emit('room_ready', { roomId: normalizedRoomId, playerId: playerId || 'player2', game });
   });
@@ -914,7 +313,7 @@ io.on('connection', (socket) => {
     drawInitialHandForTurn(nextPlayer);
 
     game.message = `${nextPlayer.name}のターンです。`;
-    game.log.unshift(`${nextPlayer.name}のターン`);
+    appendGameLogEntry(game, `${nextPlayer.name}のターン`);
     emitGameUpdate(roomId, game);
   });
 
@@ -930,7 +329,7 @@ io.on('connection', (socket) => {
       currentPlayer.resources.m = Math.max(50, currentPlayer.resources.m || 0);
       currentPlayer.energy = 0;
       game.message = 'デバッグ: 終了条件が満たされました。ターン終了で決着します。';
-      game.log.unshift(`${currentPlayer.name}が終了条件を満たしました。`);
+      appendGameLogEntry(game, `${currentPlayer.name}が終了条件を満たしました。`);
     }
 
     emitGameUpdate(roomId, game);
@@ -964,7 +363,7 @@ io.on('connection', (socket) => {
       player.resources.m = (player.resources.m || 0) + mAdd;
       player.totalEarnedAp = (player.totalEarnedAp || 0) + apAdd;
       player.totalEarnedM = (player.totalEarnedM || 0) + mAdd;
-      if (game) game.log.unshift(`${player.name}にデバッグで AP+${apAdd} M+${mAdd} を付与`);
+      if (game) appendGameLogEntry(game, `${player.name}にデバッグで AP+${apAdd} M+${mAdd} を付与`);
       socket.emit('debug_ack', { ok: true, message: `AP+${apAdd} M+${mAdd} を ${player.name} に付与しました`, ap: player.resources.ap, m: player.resources.m, totalEarnedAp: player.totalEarnedAp, totalEarnedM: player.totalEarnedM });
       emitGameUpdate(roomId, game);
     } catch (e) {
@@ -1005,7 +404,7 @@ io.on('connection', (socket) => {
         socket.emit('debug_ack', { ok: false, message: '追加するカードがありません' });
         return;
       }
-      if (game) game.log.unshift(`${player.name}にデバッグで ${addedCount} 枚のカードを手札に追加しました`);
+      if (game) appendGameLogEntry(game, `${player.name}にデバッグで ${addedCount} 枚のカードを手札に追加しました`);
       socket.emit('debug_ack', { ok: true, message: `${player.name}の手札にカードを ${addedCount} 枚追加しました` });
       emitGameUpdate(roomId, game);
     } catch (e) {
@@ -1068,8 +467,8 @@ io.on('connection', (socket) => {
         const selected = player.idleDeck?.pop();
         if (selected) {
           player.discard.push(selected);
+          appendGameLogEntry(game, `${player.name}が${selected.name}をスカウト`);
           checkUnitCompletion(player, game);
-          game.log.unshift(`${player.name}が${selected.name}をスカウト`);
         }
       } else {
         // スカウトカード以外は捨て札に追加
@@ -1108,7 +507,7 @@ io.on('connection', (socket) => {
     }
     const skipLogCards = ['街中スカウト', '書類選考', '事務所オーディション'];
     if (!skipLogCards.includes(card.name)) {
-      game.log.unshift(`${player.name}が${card.name}を購入`);
+      appendGameLogEntry(game, `${player.name}が${card.name}を購入`);
     }
     emitGameUpdate(roomId, game);
   });
@@ -1127,8 +526,8 @@ io.on('connection', (socket) => {
     const chosen = drawn[choiceIndex];
     if (chosen) {
       player.discard.push(chosen);
+      appendGameLogEntry(game, `${player.name}が${chosen.name}をスカウト`);
       checkUnitCompletion(player, game);
-      game.log.unshift(`${player.name}が${chosen.name}をスカウト`);
     }
     player.idleDeck = shuffle([...(player.idleDeck || []), ...drawn.filter((_, index) => index !== choiceIndex)]);
     delete game.pendingMarketSelection;
@@ -1191,7 +590,7 @@ io.on('connection', (socket) => {
     // Log purchase (excluding scout cards)
     const skipLogCards = ['街中スカウト', '書類選考', '事務所オーディション'];
     if (!skipLogCards.includes(card.name)) {
-      game.log.unshift(`${player.name}が${card.name}を購入`);
+      appendGameLogEntry(game, `${player.name}が${card.name}を購入`);
     }
 
     game.message = `${player.name}が${card.name}を購入。`;
@@ -1250,6 +649,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  appendGameLogEntry,
+  MAX_GAME_LOG_ENTRIES,
   getListenPort,
   createMarket,
   buildIdleDeck,
@@ -1258,9 +659,13 @@ module.exports = {
   addCardToDiscard,
   applyCardPlayEffect,
   clearTurnEffects,
+  addCardToHand,
   setupPlayerDeck,
   drawInitialHandForTurn,
   calculateFinalScores,
   checkGameEnd,
-  endGame
+  endGame,
+  createPlayer,
+  createInitialGameState,
+  checkUnitCompletion
 };

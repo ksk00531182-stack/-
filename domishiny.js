@@ -105,11 +105,11 @@ const { IDOL_CARD_DEFS, MARKET_CARD_DEFS, normalizeCardDescriptionForDisplay } =
 })();
 
 const SPECIAL_CARDS = [
-  { name: 'ドームライブ', cost: 30, value: 8, currency: 'm', type: 'special', desc: '効果なし', purchaseLimit: 3 },
+  { name: 'ドームライブ', cost: 30, value: 8, currency: 'm', type: 'special', desc: '得点15<br>このカードは使用不可', purchaseLimit: 3 },
   { name: 'アイドルのお仕事Lv.3', cost: 9, value: 3, currency: 'm', type: 'idol-work', desc: '場のアイドルカード1枚につきM+3', purchaseLimit: 10, ppCost: 0 },
-  { name: 'アリーナツアー', cost: 15, value: 6, currency: 'm', type: 'special', desc: '効果なし', purchaseLimit: 5 },
+  { name: 'アリーナツアー', cost: 15, value: 6, currency: 'm', type: 'special', desc: '得点10<br>このカードは使用不可', purchaseLimit: 5 },
   { name: 'アイドルのお仕事Lv.2', cost: 6, value: 2, currency: 'm', type: 'idol-work', desc: '場のアイドルカード1枚につきM+2', purchaseLimit: 10, ppCost: 0 },
-  { name: 'ワンマンライブ', cost: 5, value: 3, currency: 'm', type: 'special', desc: '効果なし', purchaseLimit: 8 },
+  { name: 'ワンマンライブ', cost: 5, value: 3, currency: 'm', type: 'special', desc: '得点5<br>このカードは使用不可', purchaseLimit: 8 },
   { name: 'アイドルのお仕事Lv.1', cost: 3, value: 1, currency: 'm', type: 'idol-work', desc: '場のアイドルカード1枚につきM+1', purchaseLimit: 10, ppCost: 0 }
 ];
 
@@ -178,6 +178,90 @@ function getDiscardCount(player) {
   return player.discard?.length || 0;
 }
 
+function getCardVisualClasses(card) {
+  const classes = ['card', 'hand-card'];
+  if (card?.kind === 'idol' || ['街中スカウト', '書類選考', '事務所オーディション', 'ドームライブ', 'アリーナツアー', 'ワンマンライブ'].includes(card?.name)) {
+    classes.push('card--scout');
+  }
+  if (card?.type === 'idol-work') {
+    classes.push('card--idol-work');
+  }
+  if (shouldUseSelectionCardDesc(card)) {
+    classes.push('card-selection-desc');
+  }
+  if (card?.type === 'produce') {
+    classes.push('produce-card');
+  }
+  // Treat several non-idol support cards as producer-accented
+  const producerTypes = ['radio_recording', 'talk_event', 'magazine_shoot', 'self_training', 'special_training', 'recover_pp', 'discard_hand_draw', 'next_idol_cost_zero', 'disable_idol_pp', 'campaign_girl', 'gacha_ticket'];
+  if (producerTypes.includes(card?.type)) {
+    classes.push('producer-card');
+  }
+  if (isFreeCard(card)) {
+    classes.push('free-card');
+  }
+  return classes;
+}
+
+function getHandCardDescriptionMarkup(card, myPlayer) {
+  const isLocalCpu = state.roomId === 'local';
+  return formatCardDescription(card.desc, card, myPlayer, {
+    preserveDynamicPP: false,
+    stripLeadingPPCost: card.type !== 'produce',
+    formatPPZeroWithSpace: card.type === 'produce' && isLocalCpu
+  });
+}
+
+function createGenericHandCardElement(card, myPlayer, options = {}) {
+  if (!card) return null;
+
+  const {
+    index = null,
+    canPlay = false,
+    selectedCardIndex = null,
+    showPPCostInHand = true,
+    extraClassName = '',
+    baseClassNames = ['card', 'hand-card']
+  } = options;
+
+  const cardElement = document.createElement('div');
+  const classes = [...baseClassNames, ...getCardVisualClasses(card)];
+  if (extraClassName) {
+    classes.push(extraClassName);
+  }
+  cardElement.className = classes.filter((className, index, arr) => className && arr.indexOf(className) === index).join(' ');
+
+  if (index !== null) {
+    cardElement.dataset.index = index;
+  }
+
+  const showPPCost = typeof showPPCostInHand === 'boolean'
+    ? showPPCostInHand
+    : (card.type === 'produce' || card.type === 'idol-work' || !isFreeCard(card));
+
+  cardElement.innerHTML = `
+    <div class="hand-title-box"><div class="hand-title">${card.name}</div></div>
+    <div class="hand-meta">${getHandCardDescriptionMarkup(card, myPlayer)}</div>
+  `;
+
+  adjustHandCardTitleSize(cardElement);
+  if (showPPCost) {
+    appendCardCostBadge(cardElement, card, myPlayer);
+  }
+  if (!canPlay) {
+    cardElement.classList.add('is-disabled');
+  }
+  if (selectedCardIndex !== null && index !== null && selectedCardIndex === index) {
+    cardElement.classList.add('is-selected');
+  }
+
+  return cardElement;
+}
+
+function createHandCardElement(card, myPlayer, options = {}) {
+  return createGenericHandCardElement(card, myPlayer, options);
+}
+
 function getMyPlayer() {
   if (!state.game || !state.myPlayerId) return null;
   return state.game.players?.[state.myPlayerId] || null;
@@ -216,7 +300,7 @@ function updateDebugDeckPreview() {
   const names = Object.keys(debugSelection.map);
   if (!names.length) {
     const el = document.createElement('div');
-    el.style.color = 'var(--muted)';
+    el.className = 'debug-empty-state';
     el.textContent = '選択カードなし';
     container.appendChild(el);
     return;
@@ -225,21 +309,15 @@ function updateDebugDeckPreview() {
     const count = debugSelection.map[name] || 0;
     const chip = document.createElement('div');
     chip.className = 'debug-card-chip';
-    chip.style.padding = '6px 8px';
-    chip.style.border = '1px solid rgba(148,163,184,0.15)';
-    chip.style.borderRadius = '6px';
-    chip.style.display = 'inline-flex';
-    chip.style.alignItems = 'center';
-    chip.style.gap = '8px';
     const label = document.createElement('span');
     label.textContent = `${name} x${count}`;
     const minus = document.createElement('button');
+    minus.className = 'debug-card-chip-button';
     minus.textContent = '-';
-    minus.style.minWidth = '28px';
     minus.addEventListener('click', () => addCardToSelection(name, -1));
     const plus = document.createElement('button');
+    plus.className = 'debug-card-chip-button';
     plus.textContent = '+';
-    plus.style.minWidth = '28px';
     plus.addEventListener('click', () => addCardToSelection(name, 1));
     chip.appendChild(minus);
     chip.appendChild(label);
@@ -260,11 +338,6 @@ function createDebugCardList() {
     if (excludedDebugCards.includes(card.name)) return;
     const btn = document.createElement('button');
     btn.className = 'debug-card-item';
-    btn.style.padding = '6px 8px';
-    btn.style.borderRadius = '6px';
-    btn.style.border = '1px solid rgba(148,163,184,0.12)';
-    btn.style.background = 'white';
-    btn.style.cursor = 'pointer';
     btn.title = card.desc || '';
     btn.textContent = card.name;
     btn.addEventListener('click', () => {
@@ -294,6 +367,20 @@ function applyDebugSelectionToServer() {
   });
 }
 
+
+const MAX_GAME_LOG_ENTRIES = 50;
+
+function appendGameLogEntry(game, message) {
+  if (!game || typeof game !== 'object') return;
+  if (typeof message !== 'string' || message.length === 0) return;
+  if (!Array.isArray(game.log)) {
+    game.log = [];
+  }
+  game.log.unshift(message);
+  if (game.log.length > MAX_GAME_LOG_ENTRIES) {
+    game.log.length = MAX_GAME_LOG_ENTRIES;
+  }
+}
 
 function isSidebarHistoryEntry(text) {
   if (typeof text !== 'string') return false;
@@ -398,40 +485,136 @@ function formatCardDescription(desc, card, player = getMyPlayer(), options = {})
     normalized = normalized.replace(/\bPP0\b/g, 'PP 0');
   }
 
+  normalized = normalized.replace(/PP回復\s*\+?(\d+)/g, 'PP+$1');
+  normalized = normalized.replace(/^\s*PP(?!\+)\s*\d+\s*(?:<br\s*\/?>|\r?\n|$)/i, '');
+
+  const prioritySegments = [];
+  const otherSegments = [];
+  const priorityBuckets = {
+    m: [],
+    ap: [],
+    draw: [],
+    recover: []
+  };
+  normalized.split(/(?:<br\s*\/?>|\r?\n)/i).forEach((segment) => {
+    const trimmed = segment.trim();
+    if (!trimmed) return;
+    if (/^M\+/.test(trimmed)) {
+      priorityBuckets.m.push(trimmed);
+    } else if (/^\+?\d+\s*AP獲得/i.test(trimmed) || /^AP\+/.test(trimmed)) {
+      priorityBuckets.ap.push(trimmed);
+    } else if (/^(?:\+?\d+\s*PP回復|PP(?:回復)?(?:\+?\d*|\d*))/i.test(trimmed)) {
+      // マッチ例: "PP+1", "PP1", "PP回復+1", "+1 PP回復" などを回復優先に分類
+      priorityBuckets.recover.push(trimmed);
+    } else if (/^ドロー\+/.test(trimmed)) {
+      priorityBuckets.draw.push(trimmed);
+    } else {
+      otherSegments.push(trimmed);
+    }
+  });
+  prioritySegments.push(...priorityBuckets.m, ...priorityBuckets.recover, ...priorityBuckets.ap, ...priorityBuckets.draw);
+  if (prioritySegments.length) {
+    normalized = [...prioritySegments, ...otherSegments].join('<br>');
+  }
+
   const shouldStripCostPrefix = stripCostPrefix
-    ? (card && card.type !== 'produce' && card.type !== 'idol-work' && (Number.isFinite(card.ppCost) || Number.isFinite(card.cost) || card.currency === 'ap' || card.currency === 'm'))
+    ? (card && (Number.isFinite(card.ppCost) || Number.isFinite(card.cost) || card.currency === 'ap' || card.currency === 'm'))
     : (
-      card &&
-      card.kind !== 'idol' &&
-      !(card.type === 'draw' && card.kind === 'idol') &&
-      card.type !== 'produce' &&
-      card.type !== 'idol-work' &&
-      (Number.isFinite(card.ppCost) || Number.isFinite(card.cost) || card.currency === 'ap' || card.currency === 'm') &&
-      !preserveBasePP
+      stripLeadingPPCost
+        ? (card && (Number.isFinite(card.ppCost) || Number.isFinite(card.cost) || card.currency === 'ap' || card.currency === 'm'))
+        : (
+          card &&
+          card.kind !== 'idol' &&
+          !(card.type === 'draw' && card.kind === 'idol') &&
+          card.type !== 'produce' &&
+          card.type !== 'idol-work' &&
+          (Number.isFinite(card.ppCost) || Number.isFinite(card.cost) || card.currency === 'ap' || card.currency === 'm') &&
+          !preserveBasePP
+        )
     );
 
   if (shouldStripCostPrefix) {
-    normalized = normalized.replace(/^\s*(?:PP回復|PP|AP|M)[^<\r\n]*(?:<br\s*\/?>|\r?\n)?/i, '');
+    normalized = normalized.replace(/^\s*(?:PP(?!\+)|AP(?!\+)|M(?!\+))[^<\r\n]*(?:<br\s*\/??>|\r?\n)?/i, '');
   }
   
   const basePPCost = Number.isFinite(card?.ppCost) ? card.ppCost : Number.isFinite(card?.cost) ? card.cost : null;
   const effectivePPCost = card?.kind === 'idol' && player ? getEffectivePPCost(card, player, { consumeNextIdolCostZero: false }) : null;
-  const shouldRenderDynamicIdolPP = preserveDynamicPP && card?.kind === 'idol' && basePPCost !== null && effectivePPCost !== null;
+    const shouldRenderDynamicIdolPP = preserveDynamicPP && card?.kind === 'idol' && basePPCost !== null && effectivePPCost !== null;
 
   const escaped = normalized
-    .replace(/PP回復\+?\d*/g, (match) => `<strong>${match}</strong>`)
-    .replace(/PP\s*\+?\d*/g, (match) => {
-      if (shouldRenderDynamicIdolPP) {
-        const displayText = `PP ${effectivePPCost}`;
-        return effectivePPCost !== basePPCost ? `<span class="cost-reduced">${displayText}</span>` : `<strong>${displayText}</strong>`;
-      }
-      return `<strong>${match}</strong>`;
+    .replace(/即時発動\(獲得不可\)/g, '<span class="card-description-blue">即時発動(獲得不可)</span>')
+    // PP回復: 支援される形式を複数扱う
+    .replace(/\+?\d+\s*PP回復/g, (match) => {
+      const amount = match.match(/\d+/)?.[0] || '';
+      return `<span class="card-description-emph">+${amount} PP回復</span>`;
     })
-    .replace(/AP\+?\d*/g, (match) => `<strong>${match}</strong>`)
-    .replace(/M\+?\d*/g, (match) => `<strong>${match}</strong>`)
-    .replace(/ドロー\+?\d*/g, (match) => `<strong>${match}</strong>`);
+    .replace(/PP回復\+?\d*/g, (match) => {
+      const amount = match.match(/\d+/)?.[0] || '';
+      return `<span class="card-description-emph">+${amount} PP回復</span>`;
+    })
+    .replace(/PP\+\d*/g, (match) => {
+      const amount = match.match(/\d+/)?.[0] || '';
+      return `<span class="card-description-emph">+${amount} PP回復</span>`;
+    })
+    .replace(/PP\s*\d*/g, (match) => {
+      if (shouldRenderDynamicIdolPP) {
+        const displayText = `+${effectivePPCost} PP回復`;
+        return `<span class="card-description-emph">${displayText}</span>`;
+      }
+      return match;
+    })
+    // AP獲得: 表記を強調
+    .replace(/\+?\d+\s*AP獲得/g, (match) => {
+      const amount = match.match(/\d+/)?.[0] || '';
+      return `<span class="card-description-emph">+${amount} AP獲得</span>`;
+    })
+    .replace(/AP\+\d*/g, (match) => {
+      const amount = match.match(/\d+/)?.[0] || '';
+      return `<span class="card-description-emph">+${amount} AP獲得</span>`;
+    })
+    // M獲得: 表記を強調
+    .replace(/\+?\d+\s*M獲得/g, (match) => {
+      const amount = match.match(/\d+/)?.[0] || '';
+      return `<span class="card-description-emph">+${amount} M獲得</span>`;
+    })
+    .replace(/M\+\d*/g, (match) => {
+      const amount = match.match(/\d+/)?.[0] || '';
+      return `<span class="card-description-emph">+${amount} M獲得</span>`;
+    })
+    // ドロー -> カードを引く
+    .replace(/\+?\d+\s*(?:ドロー|カードを引く)/g, (match) => {
+      const amount = match.match(/\d+/)?.[0] || '';
+      return `<span class="card-description-emph">+${amount} カードを引く</span>`;
+    })
+    .replace(/ドロー\+\d*/g, (match) => {
+      const amount = match.match(/\d+/)?.[0] || '';
+      return `<span class="card-description-emph">+${amount} カードを引く</span>`;
+    });
 
-  return escaped;
+  const rawLines = escaped.split('<br>');
+  let insertedSep = false;
+  const wrappedLines = [];
+  let prevWasEmph = null;
+
+  for (const raw of rawLines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const isEmph = /<span class="card-description-emph">[\s\S]*?<\/span>/.test(line);
+
+    // If we are transitioning from emphasized lines to non-emphasized lines,
+    // and we haven't inserted a separator yet, insert one.
+    if (prevWasEmph === true && isEmph === false && !insertedSep) {
+      wrappedLines.push('<div class="card-description-sep"></div>');
+      insertedSep = true;
+    }
+
+    wrappedLines.push(`<div class="card-description">${line}</div>`);
+    prevWasEmph = isEmph;
+  }
+
+  const wrapped = wrappedLines.join('');
+
+  return wrapped;
 }
 
 function getEffectivePPCost(card, player, options = {}) {
@@ -460,19 +643,104 @@ function getEffectivePPCost(card, player, options = {}) {
   return baseCost;
 }
 
-function getCardCostDisplayMarkup(card, player) {
+function getCardCostDisplayMarkup(card, player, options = {}) {
   if (!card) return '';
 
-  const basePPCost = Number.isFinite(card.ppCost)
-    ? card.ppCost
-    : (card.type === 'produce' || card.type === 'idol-work' || card.kind === 'idol')
-      ? card.cost
-      : null;
-  if (basePPCost === null) return '';
+  const { hideResourceCostLabels = false } = options;
+  const currencyLabel = card.currency === 'ap' ? 'AP' : card.currency === 'm' ? 'M' : 'PP';
+  const explicitPPCost = Number.isFinite(card.ppCost) ? card.ppCost : null;
+  const derivedPPCost = card.kind === 'idol' || card.type === 'produce' || card.type === 'idol-work'
+    ? (Number.isFinite(card.cost) ? card.cost : 0)
+    : null;
+  const ppCostValue = explicitPPCost ?? derivedPPCost;
+  if (ppCostValue === null || ppCostValue === undefined) return '';
 
-  const effectivePPCost = getEffectivePPCost(card, player, { consumeNextIdolCostZero: false });
-  const isReduced = effectivePPCost !== basePPCost;
-  return `<div class="card-meta card-pp-value${isReduced ? ' cost-reduced' : ''}">PP ${effectivePPCost}</div>`;
+  const effectiveCost = player
+    ? getEffectivePPCost(card, player, { consumeNextIdolCostZero: false })
+    : ppCostValue;
+  const isReduced = player && effectiveCost !== ppCostValue;
+  return `<span class="card-pp-badge${isReduced ? ' card-pp-badge--reduced' : ''}" aria-label="${currencyLabel} ${effectiveCost}">${effectiveCost}</span>`;
+}
+
+function appendCardCostBadge(container, card, player, options = {}) {
+  if (!container || !card) return;
+
+  const { hideResourceCostLabels = false } = options;
+  const isHandCard = container.classList?.contains?.('hand-card');
+  const { hideInTitle = false } = options;
+  const explicitPPCost = Number.isFinite(card.ppCost) ? card.ppCost : null;
+  const derivedPPCost = card.kind === 'idol' || card.type === 'produce' || card.type === 'idol-work'
+    ? (Number.isFinite(card.cost) ? card.cost : 0)
+    : null;
+  const ppCostValue = explicitPPCost ?? derivedPPCost;
+  if (ppCostValue === null || ppCostValue === undefined) return;
+
+  const effectiveCost = player
+    ? getEffectivePPCost(card, player, { consumeNextIdolCostZero: false })
+    : ppCostValue;
+  const isReduced = player && effectiveCost !== ppCostValue;
+  const badge = document.createElement('span');
+  badge.className = `card-pp-badge${isReduced ? ' card-pp-badge--reduced' : ''}`;
+  badge.textContent = isHandCard ? `PP${effectiveCost}` : String(effectiveCost);
+
+  // Prefer inserting the badge next to the card title (to the right of the name),
+  // unless caller requested hiding it in the title or when the card is a hand card.
+  const titleEl = container.querySelector('.hand-title, .card-title');
+  if (titleEl && !hideInTitle && !isHandCard) {
+    titleEl.appendChild(badge);
+    return;
+  }
+
+  // Append to the container (absolute bottom-center for hand cards, top-right elsewhere).
+  container.appendChild(badge);
+}
+
+// Adjust title font-size when the name is long so it doesn't overflow
+function adjustCardTitleSize(container, maxChars = 8) {
+  if (!container) return;
+  const titleEl = container.querySelector('.card-title');
+  if (!titleEl) return;
+  const text = (titleEl.textContent || '').trim();
+  const isSmall = text.length >= maxChars && text.length < 10;
+  const isXLarge = text.length >= 10;
+  titleEl.classList.toggle('card-title--small', isSmall);
+  titleEl.classList.toggle('card-title--xsmall', isXLarge);
+}
+
+function adjustHandCardTitleSize(container) {
+  if (!container) return;
+  const titleEl = container.querySelector('.hand-title');
+  if (!titleEl) return;
+  const text = (titleEl.textContent || '').trim();
+  const isSmall = text.length === 8;
+  const isXLarge = text.length >= 9;
+  titleEl.classList.toggle('hand-title--small', isSmall);
+  titleEl.classList.toggle('hand-title--xsmall', isXLarge);
+  titleEl.classList.toggle('card-title--small', false);
+  titleEl.classList.toggle('card-title--xsmall', false);
+}
+
+// Copy selected computed style properties from a reference hand card to a target item
+
+// Append a small circular PP badge to the top-right of a card container
+function appendPPBadge(container, card, player) {
+  if (!container || !card) return;
+
+  const explicitPPCost = Number.isFinite(card.ppCost) ? card.ppCost : null;
+  const derivedPPCost = card.kind === 'idol' || card.type === 'produce' || card.type === 'idol-work'
+    ? (Number.isFinite(card.cost) ? card.cost : 0)
+    : null;
+  const ppVal = explicitPPCost ?? derivedPPCost;
+  if (ppVal === null || ppVal === undefined) return;
+
+  const effective = card.kind === 'idol' && player
+    ? getEffectivePPCost(card, player, { consumeNextIdolCostZero: false })
+    : ppVal;
+
+  const ppBadge = document.createElement('div');
+  ppBadge.className = 'market-pp-badge';
+  ppBadge.textContent = String(effective);
+  container.appendChild(ppBadge);
 }
 
 // --- Local helper utilities for CPU/local play ---
@@ -617,7 +885,11 @@ function localCheckUnitCompletion(player, game) {
       });
     });
 
-    if (unitMembers.length >= requiredCount) {
+    const remainingIdleDeckMembers = Array.isArray(player.idleDeck)
+      ? player.idleDeck.filter((card) => card && card.kind === 'idol' && card.unit === unitName)
+      : [];
+
+    if (unitMembers.length >= requiredCount && remainingIdleDeckMembers.length === 0) {
       if (!game._completedUnitsLog) game._completedUnitsLog = [];
       const completionKey = `${player.id}_${unitName}`;
       if (!game._completedUnitsLog.includes(completionKey)) {
@@ -626,7 +898,7 @@ function localCheckUnitCompletion(player, game) {
           if (!game || !Array.isArray(game.log)) return;
           const completionMessage = `${player.name}が${unitName}を完成`;
           if (!game.log.includes(completionMessage)) {
-            game.log.unshift(completionMessage);
+            appendGameLogEntry(game, completionMessage);
             localEmitGameUpdate();
           }
         }, 0);
@@ -687,7 +959,7 @@ function localBuyMarketCard(playerId, cardIndex) {
     player.effects = player.effects || {};
     player.effects.nextIdolCostZero = true;
     player.energy = Math.min(3, (player.energy || 0) + 1);
-    game.log.unshift(`${player.name}が${card.name}を使用してPPを1回復`);
+    appendGameLogEntry(game, `${player.name}が${card.name}を使用してPPを1回復`);
   }
   if (card.type === 'disable_idol_pp') {
     player.effects = player.effects || {};
@@ -717,7 +989,7 @@ function localBuyMarketCard(playerId, cardIndex) {
     if (selected) {
       player.discard.push(selected);
       localCheckUnitCompletion(player, game);
-      game.log.unshift(`${player.name}が${selected.name}をスカウト`);
+      appendGameLogEntry(game, `${player.name}が${selected.name}をスカウト`);
     }
   } else {
     player.discard.push(card);
@@ -732,7 +1004,7 @@ function localBuyMarketCard(playerId, cardIndex) {
 
   const skipPurchaseLogCards = ['街中スカウト', '書類選考', '事務所オーディション'];
   if (!skipPurchaseLogCards.includes(card.name)) {
-    game.log.unshift(`${player.name}が${card.name}を購入`);
+    appendGameLogEntry(game, `${player.name}が${card.name}を購入`);
   }
 
   localEmitGameUpdate();
@@ -774,7 +1046,7 @@ function localBuySpecialCard(playerId, cardName) {
 
   const skipLogCards = ['街中スカウト', '書類選考', '事務所オーディション'];
   if (!skipLogCards.includes(card.name)) {
-    game.log.unshift(`${player.name}が${card.name}を購入`);
+    appendGameLogEntry(game, `${player.name}が${card.name}を購入`);
   }
   game.message = `${player.displayName || player.name}が${card.name}を購入。`;
   localEmitGameUpdate();
@@ -806,16 +1078,6 @@ function localCalculateFinalScores(game) {
   if (!game) return {};
 
   const UNIT_SCORE_MAP = { 2: 4, 3: 6, 4: 8, 5: 10 };
-  const UNIT_MEMBER_COUNTS = {
-    'イルミネーションスターズ': 3,
-    'アンティーカ': 5,
-    '放課後クライマックスガールズ': 5,
-    'アルストロメリア': 3,
-    'ストレイライト': 3,
-    'ノクチル': 4,
-    'シーズ': 2,
-    'コメティック': 3
-  };
 
   const results = {};
   Object.keys(game.players || {}).forEach((playerId) => {
@@ -834,45 +1096,63 @@ function localCalculateFinalScores(game) {
     let scoreEarnedAp = 0;
     let scoreEarnedM = 0;
     let scoreSpecialCards = 0;
+
     const unitMembersMap = {};
+    const specialCardCounts = {
+      ドームライブ: 0,
+      アリーナツアー: 0,
+      ワンマンライブ: 0
+    };
 
     allCards.forEach((card) => {
       if (!card) return;
+
       if (card.kind === 'idol') {
         scoreIdolCards += 1;
         if (card.unit) {
-          if (!unitMembersMap[card.unit]) unitMembersMap[card.unit] = new Set();
+          if (!unitMembersMap[card.unit]) {
+            unitMembersMap[card.unit] = new Set();
+          }
           unitMembersMap[card.unit].add(card.name);
         }
       }
+
       if (card.name === 'ドームライブ') {
+        specialCardCounts.ドームライブ += 1;
         scoreSpecialCards += 15;
       }
       if (card.name === 'アリーナツアー') {
+        specialCardCounts.アリーナツアー += 1;
         scoreSpecialCards += 10;
       }
       if (card.name === 'ワンマンライブ') {
+        specialCardCounts.ワンマンライブ += 1;
         scoreSpecialCards += 5;
       }
     });
 
-    let scoreUnitCompletion = 0;
     const completedUnits = [];
+    let scoreUnitCompletion = 0;
     Object.keys(unitMembersMap).forEach((unitName) => {
       const ownedCount = unitMembersMap[unitName].size;
       const requiredCount = UNIT_MEMBER_COUNTS[unitName] || 0;
+
       if (requiredCount > 0 && ownedCount === requiredCount) {
-        scoreUnitCompletion += UNIT_SCORE_MAP[requiredCount] || 0;
+        scoreUnitCompletion += (UNIT_SCORE_MAP[requiredCount] || 0);
         completedUnits.push(unitName);
       }
     });
 
     scoreDeckSize = Math.min(20, Math.floor(allCards.length / 3));
-    scoreEarnedAp = Math.min(20, Math.floor((player.totalEarnedAp || 0) / 5));
-    scoreEarnedM = Math.min(20, Math.floor((player.totalEarnedM || 0) / 10));
+    const totalEarnedAp = player.totalEarnedAp || 0;
+    const totalEarnedM = player.totalEarnedM || 0;
+    scoreEarnedAp = Math.min(20, Math.floor(totalEarnedAp / 5));
+    scoreEarnedM = Math.min(20, Math.floor(totalEarnedM / 10));
+
+    const totalScore = scoreIdolCards + scoreUnitCompletion + scoreDeckSize + scoreEarnedAp + scoreEarnedM + scoreSpecialCards;
 
     results[playerId] = {
-      total: scoreIdolCards + scoreUnitCompletion + scoreDeckSize + scoreEarnedAp + scoreEarnedM + scoreSpecialCards,
+      total: totalScore,
       breakdown: {
         idolCards: scoreIdolCards,
         completedUnits,
@@ -880,10 +1160,14 @@ function localCalculateFinalScores(game) {
         deckCardCount: allCards.length,
         deckSize: scoreDeckSize,
         earnedAp: scoreEarnedAp,
+        earnedApTotal: totalEarnedAp,
         earnedM: scoreEarnedM,
-        specialCards: scoreSpecialCards
+        earnedMTotal: totalEarnedM,
+        specialCards: scoreSpecialCards,
+        specialCardCounts
       }
     };
+    player.score = totalScore;
   });
 
   return results;
@@ -901,7 +1185,7 @@ function localEndGame(game) {
   game.winners = winners;
   game.message = winners.length > 1 ? '引き分けです。' : `${game.players[winners[0]]?.name || winners[0]}の勝ちです。`;
   game.log = Array.isArray(game.log) ? game.log : [];
-  game.log.unshift(game.message);
+  appendGameLogEntry(game, game.message);
 }
 
 function localConfirmMarketSelection(playerId, choiceIndex) {
@@ -916,7 +1200,7 @@ function localConfirmMarketSelection(playerId, choiceIndex) {
   if (chosen) {
     player.discard.push(chosen);
     localCheckUnitCompletion(player, game);
-    game.log.unshift(`${player.name}が${chosen.name}をスカウト`);
+    appendGameLogEntry(game, `${player.name}が${chosen.name}をスカウト`);
   }
   player.idleDeck = shuffle([...(player.idleDeck || []), ...drawn.filter((_, i) => i !== choiceIndex)]);
   game.pendingMarketSelection = null;
@@ -952,7 +1236,7 @@ function localEndTurn(playerId) {
   nextPlayer.resources = { ap: 0, m: 0 };
   localDrawInitialHandForTurn(nextPlayer);
   game.message = `${nextPlayer.displayName || nextPlayer.name}のターンです。`;
-  game.log.unshift(`${nextPlayer.name}のターン`);
+  appendGameLogEntry(game, `${nextPlayer.name}のターン`);
   localEmitGameUpdate();
   if (nextTurn === 'player2') setTimeout(cpuTakeTurn, 600);
 }
@@ -1071,7 +1355,7 @@ function localApplyCardPlayEffect(player, card, game) {
     player.effects = player.effects || {};
     player.effects.nextIdolCostZero = true;
     player.energy = Math.min(3, (player.energy || 0) + 1);
-    if (game) game.log.unshift(`${player.name}が${card.name}を使用してPPを1回復`);
+    if (game) appendGameLogEntry(game, `${player.name}が${card.name}を使用してPPを1回復`);
     return;
   }
 
@@ -1089,7 +1373,7 @@ function localApplyCardPlayEffect(player, card, game) {
 
   if (card.type === 'recover_pp') {
     player.energy = Math.min(3, (player.energy || 0) + 2);
-    if (game) game.log.unshift(`${player.name}が${card.name}を使用してPPを回復`);
+    if (game) appendGameLogEntry(game, `${player.name}が${card.name}を使用してPPを回復`);
     return;
   }
 
@@ -1111,7 +1395,7 @@ function localApplyCardPlayEffect(player, card, game) {
       if (drawnCard) player.hand.push(drawnCard);
     }
     player.energy = Math.min(3, (player.energy || 0) + 1);
-    if (game) game.log.unshift(`${player.name}が${card.name}を使用して手札を捨て、${drawCount}枚引いてPPを1回復`);
+    if (game) appendGameLogEntry(game, `${player.name}が${card.name}を使用して手札を捨て、${drawCount}枚引いてPPを1回復`);
     return;
   }
 
@@ -1126,7 +1410,7 @@ function localApplyCardPlayEffect(player, card, game) {
       const drawnCard = player.deck.pop();
       if (drawnCard) player.hand.push(drawnCard);
     }
-    if (game) game.log.unshift(`${player.name}が${card.name}を使用して${drawCount}枚引きました`);
+    if (game) appendGameLogEntry(game, `${player.name}が${card.name}を使用して${drawCount}枚引きました`);
     return;
   }
 
@@ -1145,9 +1429,9 @@ function localApplyCardPlayEffect(player, card, game) {
     player.energy = Math.min(3, (player.energy || 0) + healAmount);
     if (game) {
       if (card.type === 'magazine_shoot') {
-        game.log.unshift(`${player.name}が${card.name}を使用して${drawCount}枚引き、PPを${healAmount}回復`);
+        appendGameLogEntry(game, `${player.name}が${card.name}を使用して${drawCount}枚引き、PPを${healAmount}回復`);
       } else {
-        game.log.unshift(`${player.name}が${card.name}を使用してPPを${healAmount}回復`);
+        appendGameLogEntry(game, `${player.name}が${card.name}を使用してPPを${healAmount}回復`);
       }
     }
     return;
@@ -1168,7 +1452,7 @@ function localApplyCardPlayEffect(player, card, game) {
     player.energy = Math.min(3, (player.energy || 0) + healAmount);
     if (game) {
       const healText = healAmount > 0 ? `、PPを${healAmount}回復` : '';
-      game.log.unshift(`${player.name}が${card.name}を使用して${drawCount}枚引きました${healText}`);
+      appendGameLogEntry(game, `${player.name}が${card.name}を使用して${drawCount}枚引きました${healText}`);
     }
     return;
   }
@@ -1177,7 +1461,7 @@ function localApplyCardPlayEffect(player, card, game) {
     player.resources.m = (player.resources.m || 0) + 2;
     player.totalEarnedM = (player.totalEarnedM || 0) + 2;
     player.energy = Math.min(3, (player.energy || 0) + 1);
-    if (game) game.log.unshift(`${player.name}が${card.name}を使用してM+2、PPを1回復`);
+    if (game) appendGameLogEntry(game, `${player.name}が${card.name}を使用してM+2、PPを1回復`);
     return;
   }
 
@@ -1190,14 +1474,14 @@ function localApplyCardPlayEffect(player, card, game) {
         drawnCard.drawnFromIdleDeck = true;
         if (Array.isArray(player.hand)) player.hand.push(drawnCard);
         else player.hand = [drawnCard];
+        if (game) appendGameLogEntry(game, `${player.name}が${drawnCard.name}をスカウト`);
         if (drawnCard.kind === 'idol') {
           localCheckUnitCompletion(player, game);
         }
-        if (game) game.log.unshift(`${player.name}が${drawnCard.name}をスカウト`);
       }
     }
     player.energy = Math.min(3, (player.energy || 0) + 1);
-    if (game) game.log.unshift(`${player.name}が${card.name}を使用してアイドルデッキから1枚引きました`);
+    if (game) appendGameLogEntry(game, `${player.name}が${card.name}を使用してアイドルデッキから1枚引きました`);
     return;
   }
 
@@ -1220,13 +1504,13 @@ function localApplyCardPlayEffect(player, card, game) {
   if (card.type === 'produce') {
     player.resources.ap = (player.resources.ap || 0) + 1;
     player.totalEarnedAp = (player.totalEarnedAp || 0) + 1;
-    if (game) game.log.unshift(`${player.name}が${card.name}を使用`);
+    if (game) appendGameLogEntry(game, `${player.name}が${card.name}を使用`);
   } else if (card.type === 'idol-work') {
     const idolCount = Array.isArray(player.playedThisTurn) ? player.playedThisTurn.filter((c) => c && c.kind === 'idol').length : 0;
     const gain = (card.value || 1) * idolCount;
     player.resources.m = (player.resources.m || 0) + gain;
     player.totalEarnedM = (player.totalEarnedM || 0) + gain;
-    if (game) game.log.unshift(`${player.name}が${card.name}を使用（場のアイドル ${idolCount} 枚で M+${gain}）`);
+    if (game) appendGameLogEntry(game, `${player.name}が${card.name}を使用（場のアイドル ${idolCount} 枚で M+${gain}）`);
   } else if (card.type === 'draw') {
     const count = card.value || 1;
     for (let i = 0; i < count; i += 1) {
@@ -1238,7 +1522,7 @@ function localApplyCardPlayEffect(player, card, game) {
       const drawn = player.deck.pop();
       if (drawn) player.hand.push(drawn);
     }
-    if (game) game.log.unshift(`${player.name}が${card.name}を使用して${count}枚引きました`);
+    if (game) appendGameLogEntry(game, `${player.name}が${card.name}を使用して${count}枚引きました`);
   }
 }
 
@@ -1261,7 +1545,7 @@ function localPlayCard(playerId, cardIndex) {
   localApplyCardPlayEffect(player, card, game);
   localCheckUnitCompletion(player, game);
   game.message = `${player.displayName || player.name}が${card.name}を使用しました。`;
-  game.log.unshift(`${player.name}が${card.name}を使用しました。`);
+  appendGameLogEntry(game, `${player.name}が${card.name}を使用しました。`);
   localEmitGameUpdate();
   return true;
 }
@@ -1302,7 +1586,7 @@ function showCardTooltip(event, card) {
 
   const unitLabel = card.unit ? `ユニット: ${card.unit}` : '';
   const costLabel = getCardCostLabel(card, getMyPlayer());
-  const effect = formatCardDescription(card.desc || '', card, getMyPlayer(), { stripCostPrefix: true, preserveDynamicPP: card.kind === 'idol' });
+  const effect = formatCardDescription(card.desc || '', card, getMyPlayer(), { stripCostPrefix: true, preserveDynamicPP: false });
   
   elements.cardTooltip.innerHTML = `
     <div class="card-tooltip-title">${card.name}</div>
@@ -1314,8 +1598,8 @@ function showCardTooltip(event, card) {
 
   const x = Math.min(window.innerWidth - 220, event.clientX + 16);
   const y = Math.min(window.innerHeight - 120, event.clientY + 16);
-  elements.cardTooltip.style.left = `${x}px`;
-  elements.cardTooltip.style.top = `${y}px`;
+  elements.cardTooltip.style.setProperty('--tooltip-x', `${x}px`);
+  elements.cardTooltip.style.setProperty('--tooltip-y', `${y}px`);
 }
 
 function hideCardTooltip() {
@@ -1399,12 +1683,9 @@ function showIdleDeckList() {
     }
   });
   const container = document.createElement('div');
-  container.className = 'modal-container';
-  container.style.setProperty('width', '1120px', 'important');
-  container.style.setProperty('maxWidth', '95vw', 'important');
-  container.style.setProperty('height', '630px', 'important');
-  container.style.setProperty('maxHeight', '90vh', 'important');
-  container.style.setProperty('aspect-ratio', '16 / 9', 'important');
+  container.className = 'modal-container modal-container-wide';
+  // mark this modal as an idle-deck modal so we can style its contents specifically
+  container.classList.add('modal-idle');
 
   const list = document.createElement('div');
   list.className = 'modal-list';
@@ -1579,7 +1860,11 @@ function render() {
     if (game && Array.isArray(game.market) && game.market.length) {
       game.market.forEach((card, index) => {
         const el = document.createElement('div');
-        el.className = 'market-card';
+          el.className = 'market-card';
+          // highlight specific scout cards with light green background
+          if (["街中スカウト", "書類選考", "事務所オーディション"].includes(card?.name)) {
+            el.classList.add('card--scout');
+          }
 
         if (!card) {
           el.classList.add('market-empty');
@@ -1588,15 +1873,16 @@ function render() {
           return;
         }
 
-        if (card.kind === 'idol') el.classList.add('idol-card');
-        if (card.type === 'idol-work') el.classList.add('idol-work-card');
-        if (card.type === 'produce') el.classList.add('produce-card');
+        
         if (shouldUseSelectionCardDesc(card)) {
           el.classList.add('card-selection-desc');
         }
-        if (['街中スカウト', '書類選考', '事務所オーディション'].includes(card.name)) {
-          el.classList.add('market-card-green');
+
+        const producerTypes = ['radio_recording', 'talk_event', 'magazine_shoot', 'self_training', 'special_training', 'recover_pp', 'discard_hand_draw', 'next_idol_cost_zero', 'disable_idol_pp', 'campaign_girl', 'gacha_ticket'];
+        if (producerTypes.includes(card?.type)) {
+          el.classList.add('producer-card');
         }
+        
         if (isFreeCard(card)) {
           el.classList.add('free-card');
         }
@@ -1606,22 +1892,27 @@ function render() {
 
         if (isSoldOut) {
           // show an empty slot for sold-out cards and empty placeholders
+          el.classList.remove('producer-card', 'card--scout', 'card--idol-work', 'free-card', 'can-buy');
           el.classList.add('market-empty');
           el.innerHTML = '';
         } else {
           // position is handled by CSS
           const remainingNumber = typeof card.purchaseLimit === 'number' ? Math.max(0, (card.purchaseLimit || 0) - (card.purchaseCount || 0)) : null;
-          const costMarkup = getCardCostDisplayMarkup(card, null);
           el.innerHTML = `
-              <div class="card-title">${card.name}</div>
-              ${costMarkup}
+              <div class="card-title-box"><div class="card-title">${card.name}</div></div>
               <div class="card-meta">${formatCardDescription(card.desc, card, null, { preserveDynamicPP: false, stripCostPrefix: true })}</div>
             `;
-          const badgeCurrency = card.currency === 'ap' ? 'ap' : card.currency === 'm' ? 'm' : 'pp';
-          const costBadge = document.createElement('div');
-          costBadge.className = `market-cost-badge market-cost-badge-${badgeCurrency}`;
-          costBadge.textContent = String(card.cost);
-          el.appendChild(costBadge);
+          adjustCardTitleSize(el);
+          const hasResourceCost = card.currency === 'ap' || card.currency === 'm';
+          if (hasResourceCost) {
+            const badgeCurrency = card.currency === 'ap' ? 'ap' : 'm';
+            const costBadge = document.createElement('div');
+            costBadge.className = `market-cost-badge market-cost-badge-${badgeCurrency}`;
+            costBadge.textContent = `${badgeCurrency.toUpperCase()} ${card.cost}`;
+            el.appendChild(costBadge);
+          }
+          // show PP badge (top-right) when applicable
+          appendPPBadge(el, card, myPlayer);
           // add a small badge showing remaining count if applicable
           if (remainingNumber !== null) {
             const badge = document.createElement('div');
@@ -1629,11 +1920,11 @@ function render() {
             badge.textContent = String(remainingNumber);
             el.appendChild(badge);
           }
-          const available = getResourceAmountForCard(myPlayer, card);
-          const effectiveCost = isFreeCard(card) ? 0 : card.cost;
-          const isIdleDeckEmptySelectionCard = ['書類選考', '事務所オーディション'].includes(card.name) && (myPlayer?.idleDeck?.length || 0) === 0;
-          const canAfford = myPlayer && game.currentTurn === myPlayer.id && game.status === 'playing' && !state.isBusy && !isIdleDeckEmptySelectionCard && effectiveCost <= available;
-          if (canAfford) {
+          const availableForHighlight = getResourceAmountForCard(myPlayer, card);
+          const effectiveCostForHighlight = isFreeCard(card) ? 0 : card.cost;
+          const isIdleDeckEmptySelectionCardForHighlight = ['書類選考', '事務所オーディション'].includes(card.name) && (myPlayer?.idleDeck?.length || 0) === 0;
+          const canAffordForHighlight = !!myPlayer && !!game && game.currentTurn === myPlayer.id && game.status === 'playing' && !state.isBusy && effectiveCostForHighlight <= availableForHighlight && !isIdleDeckEmptySelectionCardForHighlight;
+          if (canAffordForHighlight) {
             el.classList.add('can-buy');
           }
           el.addEventListener('click', () => {
@@ -1664,28 +1955,37 @@ function render() {
     elements.specialCards.innerHTML = '';
     SPECIAL_CARDS.forEach((card) => {
       const el = document.createElement('div');
-      el.className = 'special-card';
-      if (card.type === 'idol-work') {
-        el.classList.add('idol-work-card');
+        el.className = 'special-card';
+        // highlight specific scout cards in special area
+        if (["街中スカウト", "書類選考", "事務所オーディション", "ドームライブ", "アリーナツアー", "ワンマンライブ"].includes(card?.name)) {
+          el.classList.add('card--scout');
+        }
+        if (card.type === 'idol-work') {
+          el.classList.add('card--idol-work');
+        }
+      const producerTypes = ['radio_recording', 'talk_event', 'magazine_shoot', 'self_training', 'special_training', 'recover_pp', 'discard_hand_draw', 'next_idol_cost_zero', 'disable_idol_pp', 'campaign_girl', 'gacha_ticket'];
+      if (producerTypes.includes(card?.type)) {
+        el.classList.add('producer-card');
       }
       if (isFreeCard(card)) {
         el.classList.add('free-card');
       }
-      if (['ドームライブ', 'アリーナツアー', 'ワンマンライブ'].includes(card.name)) {
-        el.classList.add('special-card-green');
-      }
-      const costMarkup = getCardCostDisplayMarkup(card, myPlayer);
+      
       el.innerHTML = `
-        <div class="card-title">${card.name}</div>
-        ${costMarkup}
+        <div class="card-title-box"><div class="card-title">${card.name}</div></div>
         <div class="card-meta">${formatCardDescription(card.desc, card, myPlayer, { preserveDynamicPP: false, stripCostPrefix: true })}</div>
       `;
-      // cost badge for special cards
-      const badgeCurrency = card.currency === 'ap' ? 'ap' : card.currency === 'm' ? 'm' : 'pp';
-      const costBadge = document.createElement('div');
-      costBadge.className = `market-cost-badge market-cost-badge-${badgeCurrency}`;
-      costBadge.textContent = String(card.cost);
-      el.appendChild(costBadge);
+      adjustCardTitleSize(el);
+      const hasResourceCost = card.currency === 'ap' || card.currency === 'm';
+      if (hasResourceCost) {
+        const badgeCurrency = card.currency === 'ap' ? 'ap' : 'm';
+        const costBadge = document.createElement('div');
+        costBadge.className = `market-cost-badge market-cost-badge-${badgeCurrency}`;
+        costBadge.textContent = `${badgeCurrency.toUpperCase()} ${card.cost}`;
+        el.appendChild(costBadge);
+      }
+      // show PP badge (top-right) when applicable
+      appendPPBadge(el, card, myPlayer);
       if (typeof card.purchaseLimit === 'number') {
         const purchasedCount = state.game?.specialCardPurchases?.[card.name] || 0;
         const remaining = Math.max(0, card.purchaseLimit - purchasedCount);
@@ -1762,27 +2062,12 @@ function render() {
         const basePPCost = Number.isFinite(card.ppCost) ? card.ppCost : card.cost;
         const effectivePPCost = getEffectivePPCost(card, myPlayer, { consumeNextIdolCostZero: false });
         const canPlay = isMyTurn && effectivePPCost <= myPlayer.energy;
-        const cardElement = document.createElement('div');
-        cardElement.className = 'card';
-        if (shouldUseIdolColor(card)) cardElement.classList.add('idol-card');
-        if (card.type === 'idol-work') cardElement.classList.add('idol-work-card');
-        if (card.type === 'produce') cardElement.classList.add('produce-card');
-        if (shouldUseSelectionCardDesc(card)) cardElement.classList.add('card-selection-desc');
-        cardElement.dataset.index = index;
-        const ppDisplay = getCardCostDisplayMarkup(card, myPlayer);
-        const isLocalCpu = state.roomId === 'local';
-        const showPPCostInHand = card.kind !== 'idol' && (!isFreeCard(card) || card.type === 'idol-work' || (card.type === 'produce' && !isLocalCpu));
-        cardElement.innerHTML = `
-          <div class="card-title">${card.name}</div>
-          ${showPPCostInHand ? ppDisplay : ''}
-          <div class="card-meta">${formatCardDescription(card.desc, card, myPlayer, { preserveDynamicPP: card.kind === 'idol', stripLeadingPPCost: card.kind !== 'idol' && !(card.type === 'produce' && isLocalCpu), formatPPZeroWithSpace: card.type === 'produce' && isLocalCpu })}</div>
-        `;
-        if (!canPlay) {
-          cardElement.classList.add('is-disabled');
-        }
-        if (state.selectedCardIndex === index) {
-          cardElement.classList.add('is-selected');
-        }
+        const cardElement = createHandCardElement(card, myPlayer, {
+          index,
+          canPlay,
+          selectedCardIndex: state.selectedCardIndex,
+          showPPCostInHand: card.type === 'produce' || card.type === 'idol-work' || !isFreeCard(card)
+        });
         cardElement.addEventListener('click', () => {
           if (!canPlay || state.isBusy) return;
           if (state.selectedCardIndex === index) {
@@ -1793,7 +2078,6 @@ function render() {
             render();
           }
         });
-        attachCardHover(cardElement, card);
         elements.hand.appendChild(cardElement);
       });
     }
@@ -1846,12 +2130,7 @@ function render() {
       });
 
       const container = document.createElement('div');
-      container.className = 'modal-container';
-      container.style.setProperty('width', '1120px', 'important');
-      container.style.setProperty('maxWidth', '95vw', 'important');
-      container.style.setProperty('height', '630px', 'important');
-      container.style.setProperty('maxHeight', '90vh', 'important');
-      container.style.setProperty('aspect-ratio', '16 / 9', 'important');
+      container.className = 'modal-container modal-container-wide';
       const title = document.createElement('div');
       title.className = 'modal-title';
       title.textContent = '捨て札の一覧';
@@ -1866,39 +2145,11 @@ function render() {
         empty.textContent = '捨て札はありません。';
         list.appendChild(empty);
       } else {
-        // Get hand card dimensions first
-        const handCard = document.querySelector('.hand .card');
-        let cardWidth = '90px';
-        let cardHeight = '130px';
-        if (handCard) {
-          const rect = handCard.getBoundingClientRect();
-          cardWidth = Math.round(rect.width) + 'px';
-          cardHeight = Math.round(rect.height) + 'px';
-        }
-        
         discardCards.forEach((card) => {
-          const item = document.createElement('div');
-          item.className = 'modal-list-item';
-          if (shouldUseIdolColor(card)) item.classList.add('idol-card');
-          if (card.type === 'idol-work') item.classList.add('idol-work-card');
-          if (card.type === 'produce') item.classList.add('produce-card');
-          if (shouldUseSelectionCardDesc(card)) item.classList.add('card-selection-desc');
-          const isLocalCpu = state.roomId === 'local';
-          const costMarkup = typeof getCardCostDisplayMarkup === 'function' && !(isLocalCpu && card.type === 'produce')
-            ? getCardCostDisplayMarkup(card, myPlayer)
-            : '';
-          item.innerHTML = `
-            <div class="card-title">${card?.name || '不明'}</div>
-            ${costMarkup}
-            <div class="card-meta">${formatCardDescription(card?.desc || '', card, myPlayer, { preserveDynamicPP: false, stripCostPrefix: true, formatPPZeroWithSpace: card.type === 'produce' && isLocalCpu })}</div>
-          `;
-          // Apply hand card size to modal card with !important
-          item.style.setProperty('width', cardWidth, 'important');
-          item.style.setProperty('min-width', cardWidth, 'important');
-          item.style.setProperty('max-width', cardWidth, 'important');
-          item.style.setProperty('height', cardHeight, 'important');
-          item.style.setProperty('min-height', cardHeight, 'important');
-          item.style.setProperty('max-height', cardHeight, 'important');
+          const item = createHandCardElement(card, myPlayer, {
+            showPPCostInHand: card.type === 'produce' || card.type === 'idol-work' || !isFreeCard(card)
+          });
+          if (!item) return;
           list.appendChild(item);
         });
       }
@@ -1915,24 +2166,13 @@ function render() {
   if (elements.playedArea) {
     elements.playedArea.innerHTML = '';
     if (myPlayer.playedThisTurn && myPlayer.playedThisTurn.length > 0) {
-      myPlayer.playedThisTurn.forEach((card) => {
-        const el = document.createElement('div');
-        el.className = 'played-card';
-        if (shouldUseIdolColor(card)) el.classList.add('idol-card');
-        if (card.type === 'idol-work') el.classList.add('idol-work-card');
-        if (card.type === 'produce') el.classList.add('produce-card');
-        if (shouldUseSelectionCardDesc(card)) el.classList.add('card-selection-desc');
-        const isLocalCpu = state.roomId === 'local';
-        const costMarkup = !(isLocalCpu && card.type === 'produce')
-          ? getCardCostDisplayMarkup(card, myPlayer)
-          : '';
-        el.innerHTML = `
-          <div class="card-title">${card.name}</div>
-          ${costMarkup}
-          <div class="card-meta">${formatCardDescription(card.desc, card, myPlayer, { preserveDynamicPP: false, stripCostPrefix: true, formatPPZeroWithSpace: card.type === 'produce' && isLocalCpu })}</div>
-        `;
-        elements.playedArea.appendChild(el);
-      });
+        myPlayer.playedThisTurn.forEach((card) => {
+          const el = createGenericHandCardElement(card, myPlayer, {
+            baseClassNames: ['card', 'played-card'],
+            showPPCostInHand: card.type === 'produce' || card.type === 'idol-work' || !isFreeCard(card)
+          });
+          if (el) elements.playedArea.appendChild(el);
+        });
     }
   }
 
@@ -2024,96 +2264,55 @@ function render() {
     }
   }
 
-  // render pending market selection modal if present and owned by me
-  if (game.pendingMarketSelection && game.pendingMarketSelection.playerId === state.myPlayerId) {
-    const modalId = 'market-selection-modal';
-    // remove existing
-    let existing = document.getElementById(modalId);
-    if (existing) existing.remove();
-    const modal = document.createElement('div');
-    modal.id = modalId;
-    modal.className = 'modal-overlay';
-    const container = document.createElement('div');
-    container.className = 'modal-container';
-    container.style.setProperty('width', '900px', 'important');
-    container.style.setProperty('maxWidth', '92vw', 'important');
-    container.style.setProperty('height', '500px', 'important');
-    container.style.setProperty('maxHeight', '86vh', 'important');
-    container.style.setProperty('aspect-ratio', '16 / 9', 'important');
-    container.style.setProperty('padding', '12px 16px', 'important');
-    container.style.setProperty('box-sizing', 'border-box', 'important');
-    container.style.setProperty('display', 'flex', 'important');
-    container.style.setProperty('flex-direction', 'column', 'important');
-    container.style.setProperty('justify-content', 'center', 'important');
-    container.style.setProperty('align-items', 'center', 'important');
-    container.style.setProperty('gap', '8px', 'important');
-    container.style.setProperty('position', 'relative', 'important');
-    const title = document.createElement('div');
-    title.className = 'modal-title';
-    title.textContent = 'カードを1枚選択してください';
-    container.appendChild(title);
-    const prompt = document.createElement('div');
-    prompt.className = 'modal-selection-prompt';
-    prompt.textContent = '1枚アイドルを選択してください';
-    prompt.style.setProperty('width', '100%', 'important');
-    prompt.style.setProperty('text-align', 'center', 'important');
-    container.appendChild(prompt);
-    const choices = document.createElement('div');
-    const drawnCards = Array.isArray(game.pendingMarketSelection?.drawn) ? game.pendingMarketSelection.drawn : [];
-    const shouldUseTwoRowLayout = drawnCards.length > 5;
-    choices.className = shouldUseTwoRowLayout ? 'modal-choices modal-choices-audition' : 'modal-choices';
-    if (shouldUseTwoRowLayout) {
-      choices.style.display = 'grid';
-      choices.style.gridTemplateColumns = 'repeat(5, 126px)';
-      choices.style.gridTemplateRows = 'repeat(2, 168px)';
-      choices.style.justifyContent = 'center';
-      choices.style.alignContent = 'center';
-      choices.style.justifyItems = 'center';
-      choices.style.alignItems = 'start';
-      choices.style.gap = '4px';
-      choices.style.columnGap = '4px';
-      choices.style.rowGap = '4px';
-      choices.style.overflowX = 'hidden';
-      choices.style.overflowY = 'hidden';
-      choices.style.margin = '0 auto';
-      choices.style.width = 'fit-content';
-      choices.style.maxWidth = '100%';
-    } else {
-      choices.style.display = 'flex';
-      choices.style.flexDirection = 'row';
-      choices.style.flexWrap = 'nowrap';
-      choices.style.justifyContent = 'center';
-      choices.style.alignItems = 'flex-start';
-      choices.style.gap = '6px';
-      choices.style.padding = '4px 2px 6px';
-      choices.style.margin = '0 auto';
-      choices.style.width = 'fit-content';
-      choices.style.maxWidth = '100%';
-    }
-    drawnCards.forEach((card, idx) => {
-      const c = document.createElement('div');
-      c.className = 'choice-card';
-      if (card.kind === 'idol') c.classList.add('idol-card');
-      if (card.type === 'idol-work') c.classList.add('idol-work-card');
-      if (card.type === 'produce') c.classList.add('produce-card');
-      const progress = getUnitRemainingLabel(getMyPlayer(), card);
-      c.innerHTML = `
-        <div class="card-title">${card.name}</div>
-        <div class="card-meta">${progress}</div>
-      `;
-      c.addEventListener('click', () => {
-        console.log('modal choice clicked', idx, card);
-        confirmMarketSelection(idx).catch((e) => console.error(e));
-      });
-      choices.appendChild(c);
-    });
-    container.appendChild(choices);
-    modal.appendChild(container);
-    document.body.appendChild(modal);
-  } else {
-    const existing = document.getElementById('market-selection-modal');
-    if (existing) existing.remove();
+  renderPendingMarketSelectionModal(game, state.myPlayerId);
+}
+
+function renderPendingMarketSelectionModal(game, myPlayerId) {
+  const modalId = 'market-selection-modal';
+  const existing = document.getElementById(modalId);
+  if (existing) existing.remove();
+
+  if (!game?.pendingMarketSelection || game.pendingMarketSelection.playerId !== myPlayerId) {
+    return;
   }
+
+  const modal = document.createElement('div');
+  modal.id = modalId;
+  modal.className = 'modal-overlay';
+
+  const container = document.createElement('div');
+  container.className = 'modal-container modal-container-wide modal-container-selection market-selection-modal';
+
+  const title = document.createElement('div');
+  title.className = 'modal-selection-prompt';
+  title.textContent = '1枚アイドルを選択してください';
+  container.appendChild(title);
+
+  const choices = document.createElement('div');
+  const drawnCards = Array.isArray(game.pendingMarketSelection?.drawn) ? game.pendingMarketSelection.drawn : [];
+  const useAuditionLayout = drawnCards.length > 5;
+  choices.className = useAuditionLayout ? 'modal-choices modal-choices-audition' : 'modal-choices modal-choices-standard';
+
+  drawnCards.forEach((card, idx) => {
+    const choiceCard = document.createElement('div');
+    choiceCard.className = 'choice-card';
+
+    const progress = getUnitRemainingLabel(getMyPlayer(), card);
+    choiceCard.innerHTML = `
+      <div class="card-title-box"><div class="card-title">${card.name}</div></div>
+      <div class="card-meta">${progress}</div>
+    `;
+
+    choiceCard.addEventListener('click', () => {
+      confirmMarketSelection(idx).catch((error) => console.error(error));
+    });
+
+    choices.appendChild(choiceCard);
+  });
+
+  container.appendChild(choices);
+  modal.appendChild(container);
+  document.body.appendChild(modal);
 }
 
 function renderFinishedReportPrompt(game) {
@@ -2305,31 +2504,10 @@ function renderFinishedReportOverlay(game) {
   const overlay = document.createElement('div');
   overlay.id = 'finished-report-overlay';
   overlay.className = 'finished-overlay';
-  overlay.style.position = 'fixed';
-  overlay.style.top = '0';
-  overlay.style.left = '0';
-  overlay.style.right = '0';
-  overlay.style.bottom = '0';
-  overlay.style.zIndex = '1100';
-  overlay.style.display = 'grid';
-  overlay.style.placeItems = 'center';
-  overlay.style.background = 'rgba(15, 23, 42, 0.82)';
-  overlay.style.padding = 'max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))';
-  overlay.style.overflowY = 'auto';
 
   const container = document.createElement('div');
   container.id = 'finished-report-container';
   container.className = 'finished-report-body';
-  container.style.margin = 'auto';
-  container.style.textAlign = 'center';
-  container.style.width = '100%';
-  container.style.maxWidth = '900px';
-  container.style.boxSizing = 'border-box';
-  container.style.display = 'flex';
-  container.style.flexDirection = 'column';
-  container.style.alignItems = 'center';
-  container.style.justifyContent = 'flex-start';
-  container.style.gap = '12px';
 
   const title = document.createElement('div');
   title.className = 'report-title';
@@ -2368,32 +2546,55 @@ function renderFinishedReportOverlay(game) {
 
   const rows = [
     { key: 'idolCards', label: (data, revealed) => revealed ? `アイドルカード ${data.idolCards}枚` : 'アイドルカード', scoreKey: 'idolCards' },
-    { key: 'completedUnits', label: (data, revealed) => {
-        if (!revealed) return 'ユニット';
-        const names = Array.isArray(data.completedUnits) && data.completedUnits.length
-          ? data.completedUnits.join(' ')
-          : '未完成';
-        return `ユニット ${names}`;
-      }, scoreKey: 'unitCompletion' },
+    { key: 'completedUnits', label: () => 'ユニット', scoreKey: 'unitCompletion' },
     { key: 'deckCardCount', label: (data, revealed) => revealed ? `デッキ総数 ${data.deckCardCount}枚` : 'デッキ総数', scoreKey: 'deckSize' },
     { key: 'earnedAp', label: (data, revealed) => revealed ? `累計AP (${data.earnedApTotal ?? '?'}AP)` : '累計AP', scoreKey: 'earnedAp' },
     { key: 'earnedM', label: (data, revealed) => revealed ? `累計M (${data.earnedMTotal ?? '?'}M)` : '累計M', scoreKey: 'earnedM' },
-    { key: 'specialCards', label: (data, revealed) => {
-        if (!revealed) return 'ライブカード';
-        const counts = ['ドームライブ', 'アリーナツアー', 'ワンマンライブ']
-          .filter((cardName) => (data.specialCardCounts?.[cardName] || 0) > 0)
-          .map((cardName) => `${cardName}${data.specialCardCounts[cardName]}枚`);
-        return counts.length ? `ライブカード ${counts.join(' ')}` : 'ライブカード';
-      }, scoreKey: 'specialCards' }
+    { key: 'specialCards', label: () => 'ライブカード', scoreKey: 'specialCards' }
   ];
 
   const columns = document.createElement('div');
   columns.className = 'report-columns';
 
+  const UNIT_SCORE_MAP = { 2: 4, 3: 6, 4: 8, 5: 10 };
+  const LIVE_CARD_NAMES = ['ドームライブ', 'アリーナツアー', 'ワンマンライブ'];
+  const buildUnitScoreRows = (playerData) => {
+    const allCards = [
+      ...(playerData?.hand || []),
+      ...(playerData?.deck || []),
+      ...(playerData?.discard || []),
+      ...(playerData?.playedThisTurn || [])
+    ];
+    const unitMembersMap = {};
+
+    allCards.forEach((card) => {
+      if (!card || card.kind !== 'idol' || !card.unit) return;
+      if (!unitMembersMap[card.unit]) unitMembersMap[card.unit] = new Set();
+      unitMembersMap[card.unit].add(card.name);
+    });
+
+    return Object.keys(UNIT_MEMBER_COUNTS).map((unitName) => {
+      const requiredCount = UNIT_MEMBER_COUNTS[unitName] || 0;
+      const ownedCount = unitMembersMap[unitName]?.size || 0;
+      const completed = requiredCount > 0 && ownedCount === requiredCount;
+      const score = completed ? (UNIT_SCORE_MAP[requiredCount] || 0) : 0;
+      return { name: unitName, score, completed };
+    });
+  };
+
   ['player1', 'player2'].forEach((playerId) => {
     const player = game.players?.[playerId];
     const scoreData = game.finalScores?.[playerId];
     const playerName = player?.name || playerId;
+    const unitScoreRows = buildUnitScoreRows(player);
+    const liveCardRows = LIVE_CARD_NAMES.map((cardName) => {
+      const count = scoreData?.breakdown?.specialCardCounts?.[cardName] || 0;
+      const pointMap = { ドームライブ: 15, アリーナツアー: 10, ワンマンライブ: 5 };
+      return {
+        name: cardName,
+        score: count * (pointMap[cardName] || 0)
+      };
+    });
 
     const column = document.createElement('div');
     column.className = 'report-column';
@@ -2413,15 +2614,54 @@ function renderFinishedReportOverlay(game) {
       if (isRevealed) revealedTotal += actualValue;
 
       const rowEl = document.createElement('div');
-      rowEl.className = 'report-item';
+      rowEl.className = ['completedUnits', 'specialCards'].includes(row.key) ? 'report-item report-item--stacked' : 'report-item';
       const labelEl = document.createElement('div');
       labelEl.className = 'report-item-label';
       labelEl.textContent = label;
-      const valueEl = document.createElement('div');
-      valueEl.className = 'report-item-value';
-      valueEl.textContent = value;
       rowEl.appendChild(labelEl);
-      rowEl.appendChild(valueEl);
+      if (!['completedUnits', 'specialCards'].includes(row.key)) {
+        const valueEl = document.createElement('div');
+        valueEl.className = 'report-item-value';
+        valueEl.textContent = value;
+        rowEl.appendChild(valueEl);
+      }
+
+      if (row.key === 'completedUnits') {
+        const unitList = document.createElement('div');
+        unitList.className = 'report-unit-list';
+        unitScoreRows.forEach((unitItem) => {
+          const unitItemEl = document.createElement('div');
+          unitItemEl.className = 'report-unit-item';
+          const unitLabelEl = document.createElement('div');
+          unitLabelEl.className = 'report-unit-label';
+          unitLabelEl.textContent = unitItem.name;
+          const unitValueEl = document.createElement('div');
+          unitValueEl.className = 'report-unit-value';
+          unitValueEl.textContent = state.finishedReportStep > 1 ? String(unitItem.score) : '?';
+          unitItemEl.appendChild(unitLabelEl);
+          unitItemEl.appendChild(unitValueEl);
+          unitList.appendChild(unitItemEl);
+        });
+        rowEl.appendChild(unitList);
+      } else if (row.key === 'specialCards') {
+        const liveCardList = document.createElement('div');
+        liveCardList.className = 'report-unit-list';
+        liveCardRows.forEach((cardItem) => {
+          const cardItemEl = document.createElement('div');
+          cardItemEl.className = 'report-unit-item';
+          const cardLabelEl = document.createElement('div');
+          cardLabelEl.className = 'report-unit-label';
+          cardLabelEl.textContent = cardItem.name;
+          const cardValueEl = document.createElement('div');
+          cardValueEl.className = 'report-unit-value';
+          cardValueEl.textContent = state.finishedReportStep > 5 ? String(cardItem.score) : '?';
+          cardItemEl.appendChild(cardLabelEl);
+          cardItemEl.appendChild(cardValueEl);
+          liveCardList.appendChild(cardItemEl);
+        });
+        rowEl.appendChild(liveCardList);
+      }
+
       column.appendChild(rowEl);
     });
 
@@ -2734,7 +2974,7 @@ function bindEvents() {
     });
   }
   if (elements.idleDeckPanel) {
-    elements.idleDeckPanel.style.cursor = 'pointer';
+    elements.idleDeckPanel.classList.add('is-clickable');
     elements.idleDeckPanel.addEventListener('click', () => {
       if (state.isBusy || !state.game || !state.myPlayerId) return;
       showIdleDeckList();
