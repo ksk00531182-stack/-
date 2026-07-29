@@ -1,6 +1,8 @@
 function normalizeCardDescription(desc) {
   if (typeof desc !== 'string') return '';
-  return desc.trim();
+  return desc.trim()
+    .replace(/^\s*PP(?!\+)\s*\d+\s*(?:<br\s*\/?>|\r?\n|$)/i, '')
+    .replace(/PP回復\s*\+?(\d+)/g, 'PP+$1');
 }
 
 function shouldStripLeadingCostPrefix(card, preserveBasePP = false) {
@@ -17,7 +19,7 @@ function normalizeCardDescriptionForDisplay(desc, card, options = {}) {
   let normalized = desc.trim();
 
   if (shouldStripLeadingCostPrefix(card, preserveBasePP)) {
-    normalized = normalized.replace(/^\s*(?:PP回復|PP|AP|M)[^<\r\n]*(?:<br\s*\/?>|\r?\n)?/i, '');
+    normalized = normalized.replace(/^\s*(?:PP(?!\+)|AP|M)[^<\r\n]*(?:<br\s*\/?>|\r?\n)?/i, '');
   }
 
   return normalized;
@@ -65,7 +67,7 @@ const MARKET_CARD_DEFS = [
   { internalId: 'A9', name: 'キャンペーンガール', cost: 2, currency: 'ap', type: 'campaign_girl', desc: 'PP1\nM+2\nPP回復+1', effectValue: 2, ppCost: 1 },
   { internalId: 'M5', name: 'ガシャチケット', cost: 5, currency: 'm', type: 'gacha_ticket', desc: 'PP1\nアイドルデッキから1枚手札に加える\nPP回復+1', effectValue: 1, ppCost: 1 },
   { internalId: 'A8', name: '特別レッスン', cost: 5, currency: 'ap', type: 'special_training', desc: 'PP2<br>ドロー+3<br>PP回復+1', effectValue: 3, ppCost: 2 },
-  { internalId: 'M1', name: 'リカバリーソーダ', cost: 6, currency: 'm', type: 'recover_pp', desc: 'PP1\nPP回復+2', effectValue: 2, ppCost: 1 },
+  { internalId: 'M1', name: 'リカバリーソーダ', cost: 6, currency: 'm', type: 'recover_pp', desc: 'PP1\nPP+2', effectValue: 2, ppCost: 1 },
   { internalId: 'M2', name: '予定変更付箋', cost: 4, currency: 'm', type: 'discard_hand_draw', desc: 'PP1\n手札を全て捨て札にし、その数＋1枚ドローする\nPP回復+1', effectValue: 1, ppCost: 1 },
   { internalId: 'M3', name: '283プロのTシャツ', cost: 4, currency: 'm', type: 'next_idol_cost_zero', desc: 'PP1\n次に使うアイドルのPPを0にする\nPP回復+1', effectValue: 0, ppCost: 1 },
   { internalId: 'M4', name: '親愛のお守り', cost: 12, currency: 'm', type: 'disable_idol_pp', desc: 'PP2\nこのターンの間、アイドルの消費PPをすべて0にする', effectValue: 0, ppCost: 2 }
