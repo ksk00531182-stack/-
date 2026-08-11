@@ -36,9 +36,6 @@ function appendGameLogEntry(game, message) {
   }
 
   game.log.unshift(message);
-  if (game.log.length > MAX_GAME_LOG_ENTRIES) {
-    game.log.length = MAX_GAME_LOG_ENTRIES;
-  }
 }
 
 function createPlayer(name, id) {

@@ -941,15 +941,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
   width: 100%;
   min-width: 220px;
   padding-top: 0px;
-  height: 0; /* 追加: グリッドのセル自体を履歴の長さで押し広げるのを強制的に防ぐ */
-  min-height: 100%; /* 追加: 手札フィールドエリア（グリッドの高さ）と同じ高さを確保する */
-  align-self: stretch;
-  overflow: hidden;
-}
-
-.card-meta {
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(148, 163, 184, 0.75);
+    height: auto;
+    min-height: 0;
   border-radius: 10px;
   padding: 8px 10px;
   margin-top: 6px;
@@ -1223,14 +1216,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
   margin: 0;
   padding: 8px 8px 10px 8px;
   list-style: none;
-  flex: 1 1 auto; /* `1` から `1 1 auto`（または flex-shrink: 1）に変更 */
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   background: rgba(255,255,255,0.02);
   border-radius: 8px;
   font-size: 0.82rem;
   color: var(--muted);
-  display: block;
+  display: flex;
+  flex-direction: column;
 }
 .history-list li {
   padding: 2px 0;
